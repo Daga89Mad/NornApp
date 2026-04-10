@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 12
+  static const int _dbVersion = DBSchema.version; // 13
   Database? _database;
 
   Future<Database> get database async {
@@ -66,29 +66,35 @@ class DBProvider {
             'alarm_at INTEGER',
             'has_notification INTEGER NOT NULL DEFAULT 0',
             'notification_at INTEGER',
-            'solo_para_mi INTEGER NOT NULL DEFAULT 0',
           ]) {
             await db.execute(
               'ALTER TABLE ${DBSchema.tableEvents} ADD COLUMN $col',
             );
           }
+          debugPrint('Migración v6: alarmas añadidas a eventos');
           break;
         case 7:
-          await db.execute(DBSchema.createJokes);
-          await db.execute(DBSchema.createPhrases);
-          await db.execute(DBSchema.createLanguageWords);
+          await db.execute(
+            'ALTER TABLE ${DBSchema.tableEvents} ADD COLUMN solo_para_mi INTEGER NOT NULL DEFAULT 0',
+          );
+          debugPrint('Migración v7: solo_para_mi añadido');
           break;
         case 8:
-          await db.execute(DBSchema.createFacts);
+          await db.execute(DBSchema.createFriends);
+          debugPrint('Migración v8: tabla friends creada');
           break;
         case 9:
           await db.execute(
-            'DROP TABLE IF EXISTS ${DBSchema.tableLanguageWords}',
+            'ALTER TABLE ${DBSchema.tableEvents} ADD COLUMN owner_id TEXT',
           );
-          await db.execute(DBSchema.createLanguageWords);
+          debugPrint('Migración v9: owner_id en eventos');
           break;
         case 10:
-          await db.execute(DBSchema.createFriends);
+          await db.execute(DBSchema.createJokes);
+          await db.execute(DBSchema.createPhrases);
+          await db.execute(DBSchema.createLanguageWords);
+          await db.execute(DBSchema.createFacts);
+          debugPrint('Migración v10: tablas contenido diario creadas');
           break;
         case 11:
           await db.execute(
@@ -100,11 +106,9 @@ class DBProvider {
           await db.execute(
             "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN firebase_uid TEXT",
           );
+          debugPrint('Migración v11: amigos con alias/logo/uid');
           break;
         case 12:
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN owner_id TEXT",
-          );
           await db.execute(
             "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN shift_name TEXT NOT NULL DEFAULT ''",
           );
@@ -119,18 +123,18 @@ class DBProvider {
           );
           debugPrint('Migración v12: shift_assignments enriquecido');
           break;
-        case 11:
-          // Añadir alias, logo, firebase_uid a friends existente
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN alias TEXT NOT NULL DEFAULT ''",
+
+        // ── v13: corrige checklist_items.id de INTEGER AUTOINCREMENT a TEXT ──
+        // La columna id antes era INTEGER PRIMARY KEY AUTOINCREMENT, pero
+        // ChecklistRepository genera IDs de tipo String → datatype mismatch (error 20).
+        // Solución: recrear la tabla con id TEXT PRIMARY KEY.
+        // Los ítems anteriores (si los hubiera) se pierden; los eventos no se tocan.
+        case 13:
+          await db.execute('DROP TABLE IF EXISTS ${DBSchema.tableChecklist}');
+          await db.execute(DBSchema.createChecklist);
+          debugPrint(
+            'Migración v13: checklist_items.id cambiado a TEXT PRIMARY KEY',
           );
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN logo TEXT NOT NULL DEFAULT '😊'",
-          );
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN firebase_uid TEXT",
-          );
-          debugPrint('Migración v11: amigos con alias/logo/uid');
           break;
       }
     }
@@ -151,8 +155,9 @@ class DBProvider {
     if (rows.isEmpty) return;
     final c = await database;
     final batch = c.batch();
-    for (final r in rows)
+    for (final r in rows) {
       batch.insert(table, r, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
     await batch.commit(noResult: true);
   }
 
@@ -165,7 +170,10 @@ class DBProvider {
   }) async {
     final c = await database;
     return c.rawQuery(
-      'SELECT * FROM $table${where != null ? ' WHERE $where' : ''}${orderBy != null ? ' ORDER BY $orderBy' : ''}${limit != null ? ' LIMIT $limit' : ''}',
+      'SELECT * FROM $table'
+      '${where != null ? ' WHERE $where' : ''}'
+      '${orderBy != null ? ' ORDER BY $orderBy' : ''}'
+      '${limit != null ? ' LIMIT $limit' : ''}',
       whereArgs,
     );
   }
@@ -192,16 +200,8 @@ class DBProvider {
 
   /// Fuerza el cierre y reapertura de la conexión.
   /// Útil si la BD queda en estado inválido (SQLITE_READONLY_DBMOVED).
-  Future<void> resetConnection() async {
-    await close();
-    _database = await _initDB();
-    debugPrint('🔄 Conexión SQLite restablecida');
-  }
-
-  Future<void> close() async {
-    if (_database != null && _database!.isOpen) {
-      await _database!.close();
-      _database = null;
-    }
+  Future<void> reset() async {
+    await _database?.close();
+    _database = null;
   }
 }

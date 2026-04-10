@@ -1,6 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 12;
+  static const int version = 13; // ← subido de 12 a 13
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -30,12 +30,23 @@ class DBSchema {
     )
   """;
 
-  static const String createChecklist =
-      """CREATE TABLE checklist_items (id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, text TEXT NOT NULL, is_checked INTEGER NOT NULL DEFAULT 0, position INTEGER NOT NULL DEFAULT 0)""";
+  // ↓ CORRECCIÓN: id TEXT PRIMARY KEY (antes INTEGER PRIMARY KEY AUTOINCREMENT)
+  // ChecklistRepository usa _generateId() que devuelve String → mismatch resuelto.
+  static const String createChecklist = """
+    CREATE TABLE checklist_items (
+      id TEXT PRIMARY KEY,
+      event_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      is_checked INTEGER NOT NULL DEFAULT 0,
+      position INTEGER NOT NULL DEFAULT 0
+    )
+  """;
+
   static const String createShifts =
       """CREATE TABLE shifts (id TEXT PRIMARY KEY, name TEXT NOT NULL, color INTEGER NOT NULL, from_minutes INTEGER NOT NULL DEFAULT 0, to_minutes INTEGER NOT NULL DEFAULT 0, euro_per_hour REAL, sort_order INTEGER NOT NULL DEFAULT 0)""";
-  static const String createShiftAssignments =
-      """CREATE TABLE shift_assignments (
+
+  static const String createShiftAssignments = """
+    CREATE TABLE shift_assignments (
       id TEXT PRIMARY KEY,
       shift_id TEXT NOT NULL,
       date INTEGER NOT NULL,
@@ -44,25 +55,30 @@ class DBSchema {
       shift_color INTEGER NOT NULL DEFAULT 4280391411,
       shift_from_minutes INTEGER NOT NULL DEFAULT 0,
       shift_to_minutes INTEGER NOT NULL DEFAULT 0
-    )""";
+    )
+  """;
+
   static const String createJokes =
       """CREATE TABLE jokes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
-  static const String createPhrases =
-      """CREATE TABLE phrases (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, author TEXT NOT NULL DEFAULT '')""";
-  static const String createLanguageWords =
-      """CREATE TABLE language_words (id INTEGER PRIMARY KEY AUTOINCREMENT, language TEXT NOT NULL, phrase TEXT NOT NULL, pronunciation TEXT NOT NULL DEFAULT '', meaning TEXT NOT NULL, example TEXT NOT NULL DEFAULT '', example_pronunciation TEXT NOT NULL DEFAULT '')""";
-  static const String createFacts =
-      """CREATE TABLE interesting_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, category TEXT NOT NULL DEFAULT '')""";
 
-  // v11: alias + logo + firebase_uid
+  static const String createPhrases =
+      """CREATE TABLE phrases (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
+
+  static const String createLanguageWords =
+      """CREATE TABLE language_words (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, translation TEXT NOT NULL, language TEXT NOT NULL)""";
+
+  static const String createFacts =
+      """CREATE TABLE interesting_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
+
   static const String createFriends = """
     CREATE TABLE friends (
-      id           TEXT PRIMARY KEY,
-      name         TEXT NOT NULL,
-      email        TEXT NOT NULL UNIQUE,
-      alias        TEXT NOT NULL DEFAULT '',
-      logo         TEXT NOT NULL DEFAULT '😊',
-      firebase_uid TEXT
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL DEFAULT '',
+      alias TEXT NOT NULL DEFAULT '',
+      logo TEXT NOT NULL DEFAULT '😊',
+      firebase_uid TEXT,
+      owner_id TEXT
     )
   """;
 }
