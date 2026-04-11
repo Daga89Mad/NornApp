@@ -1,14 +1,14 @@
 // lib/core/firebase_sync_service.dart
 //
-// Sincronización bidireccional SQLite ↔ Firestore.
+// ARQUITECTURA DEL CHECKLIST (v2 - definitiva):
+//  Los items se guardan DENTRO del documento del evento en Firestore
+//  como campo Map: "checklist_items": { itemId: {text, is_checked, position} }
 //
-// Estrategia:
-//  - Login      → pullAll()  : Firebase → SQLite (todo del usuario + compartido)
-//  - Escritura  → pushXxx()  : SQLite + Firestore simultáneamente
-//  - Tiempo real→ startListening() : snapshot de eventos compartidos → SQLite
-//
-// Las tablas de contenido estático (jokes, phrases, language_words,
-// interesting_facts) NO se sincronizan.
+//  Ventajas vs colección separada:
+//   ✅ Sin race condition (items viajan con el evento)
+//   ✅ Sin índice extra en Firestore
+//   ✅ El listener ya trae los items, sin consulta adicional
+//   ✅ Toggle actualiza events/{id}.checklist_items.{itemId}.is_checked
 
 import 'dart:async';
 import 'package:flutter/foundation.dart' show VoidCallback, debugPrint;
@@ -18,7 +18,6 @@ import 'package:flutter/material.dart' show Color;
 import '../models/event_item.dart';
 import '../models/shift_model.dart';
 import '../models/friend_model.dart';
-import '../models/shift_model.dart';
 import '../models/friend_request_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
@@ -28,14 +27,7 @@ class FirebaseSyncService {
   static final FirebaseSyncService instance = FirebaseSyncService._();
 
   final FirebaseFirestore _db = FirebaseFirestore.instance;
-
-  // Listeners activos (cancelar al logout)
   final List<StreamSubscription> _subscriptions = [];
-
-  // ── Helpers de conversión ─────────────────────────────────────────────────
-
-  int _dayMs(DateTime d) =>
-      DateTime.utc(d.year, d.month, d.day).millisecondsSinceEpoch;
 
   Timestamp? _tsFromMs(int? ms) =>
       ms != null ? Timestamp.fromMillisecondsSinceEpoch(ms) : null;
@@ -44,7 +36,7 @@ class FirebaseSyncService {
       ts is Timestamp ? ts.millisecondsSinceEpoch : null;
 
   // ══════════════════════════════════════════════════════════════════════════
-  // PULL — Firebase → SQLite  (se llama al hacer login)
+  // PULL — Firebase → SQLite  (login)
   // ══════════════════════════════════════════════════════════════════════════
 
   Future<void> pullAll(String uid) async {
@@ -54,24 +46,19 @@ class FirebaseSyncService {
       _pullShifts(uid),
       _pullShiftAssignments(uid),
       _pullFriends(uid),
-      pullAcceptedRequests(
-        uid,
-      ), // amistades aceptadas que aún no tenemos localmente
+      pullAcceptedRequests(uid),
     ]);
     debugPrint('✅ Sync pull completado');
   }
 
-  // ── Pull: Eventos ─────────────────────────────────────────────────────────
+  // ── Pull: Eventos + checklist embebido ────────────────────────────────────
 
   Future<void> _pullEvents(String uid) async {
     try {
-      // Propios
       final own = await _db
           .collection('events')
           .where('owner_id', isEqualTo: uid)
           .get();
-
-      // Compartidos con el usuario
       final shared = await _db
           .collection('events')
           .where('shared_with', arrayContains: uid)
@@ -80,9 +67,12 @@ class FirebaseSyncService {
       final allDocs = {...own.docs, ...shared.docs};
       if (allDocs.isEmpty) return;
 
-      final rows = allDocs.map((d) {
+      final eventRows = <Map<String, dynamic>>[];
+      final checklistRows = <Map<String, dynamic>>[];
+
+      for (final d in allDocs) {
         final data = d.data();
-        return {
+        eventRows.add({
           'id': d.id,
           'title': data['title'] ?? '',
           'description': data['description'] ?? '',
@@ -102,11 +92,29 @@ class FirebaseSyncService {
           'has_notification': (data['has_notification'] ?? false) ? 1 : 0,
           'notification_at': _msFromTs(data['notification_at']),
           'solo_para_mi': (data['solo_para_mi'] ?? false) ? 1 : 0,
-        };
-      }).toList();
+        });
 
-      await DBProvider.db.batchInsert(DBSchema.tableEvents, rows);
-      debugPrint('📥 ${rows.length} eventos sincronizados');
+        // Extraer checklist embebido en el doc del evento
+        final embedded = data['checklist_items'] as Map<String, dynamic>? ?? {};
+        for (final entry in embedded.entries) {
+          final item = entry.value as Map<String, dynamic>;
+          checklistRows.add({
+            'id': entry.key,
+            'event_id': d.id,
+            'text': item['text'] ?? '',
+            'is_checked': (item['is_checked'] ?? false) ? 1 : 0,
+            'position': item['position'] ?? 0,
+          });
+        }
+      }
+
+      await DBProvider.db.batchInsert(DBSchema.tableEvents, eventRows);
+      if (checklistRows.isNotEmpty) {
+        await DBProvider.db.batchInsert(DBSchema.tableChecklist, checklistRows);
+      }
+      debugPrint(
+        '📥 ${eventRows.length} eventos + ${checklistRows.length} checklist items',
+      );
     } catch (e) {
       debugPrint('❌ Error pull events: $e');
     }
@@ -121,7 +129,6 @@ class FirebaseSyncService {
           .where('owner_id', isEqualTo: uid)
           .get();
       if (snap.docs.isEmpty) return;
-
       final rows = snap.docs.map((d) {
         final data = d.data();
         return {
@@ -134,15 +141,14 @@ class FirebaseSyncService {
           'sort_order': data['sort_order'] ?? 0,
         };
       }).toList();
-
       await DBProvider.db.batchInsert(DBSchema.tableShifts, rows);
-      debugPrint('📥 ${rows.length} turnos sincronizados');
+      debugPrint('📥 ${rows.length} turnos');
     } catch (e) {
       debugPrint('❌ Error pull shifts: $e');
     }
   }
 
-  // ── Pull: Asignaciones de turno ───────────────────────────────────────────
+  // ── Pull: Asignaciones ────────────────────────────────────────────────────
 
   Future<void> _pullShiftAssignments(String uid) async {
     try {
@@ -151,7 +157,6 @@ class FirebaseSyncService {
           .where('owner_id', isEqualTo: uid)
           .get();
       if (snap.docs.isEmpty) return;
-
       final rows = snap.docs.map((d) {
         final data = d.data();
         return {
@@ -160,74 +165,9 @@ class FirebaseSyncService {
           'date': _msFromTs(data['date']) ?? 0,
         };
       }).toList();
-
       await DBProvider.db.batchInsert(DBSchema.tableShiftAssignments, rows);
-      debugPrint('📥 ${rows.length} asignaciones sincronizadas');
     } catch (e) {
       debugPrint('❌ Error pull shift_assignments: $e');
-    }
-  }
-
-  // ── Pull: Solicitudes aceptadas (relación inversa) ───────────────────────────
-  // Cuando A envió una solicitud y B la aceptó, A necesita saber que B
-  // es ahora su amigo. Lo detectamos buscando solicitudes enviadas por A
-  // con status 'accepted' y guardamos a B como amigo local si no existe ya.
-
-  Future<void> pullAcceptedRequests(String uid) async {
-    try {
-      // Solo buscamos 'accepted' — 'synced' y 'removed' ya fueron procesadas
-      final snap = await _db
-          .collection('friend_requests')
-          .where('from_uid', isEqualTo: uid)
-          .where('status', isEqualTo: 'accepted')
-          .get();
-
-      if (snap.docs.isEmpty) return;
-
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final toUid = data['to_uid'] as String? ?? '';
-        final toEmail = data['to_email'] as String? ?? '';
-        if (toUid.isEmpty) continue;
-
-        // Obtener perfil actualizado del amigo
-        final profileSnap = await _db
-            .collection('user_profiles')
-            .doc(toUid)
-            .get();
-        final profileData = profileSnap.data();
-        final toName = (profileData?['name'] as String?) ?? toEmail;
-
-        // Solo añadir si no existe ya localmente
-        final existing = await DBProvider.db.query(
-          DBSchema.tableFriends,
-          where: 'firebase_uid = ?',
-          whereArgs: [toUid],
-        );
-
-        if (existing.isEmpty) {
-          // Usar el logo que el emisor eligió (guardado en from_logo
-          // de la solicitud), no el logo por defecto
-          final chosenLogo = (data['from_logo'] as String?)?.isNotEmpty == true
-              ? data['from_logo'] as String
-              : '😊';
-          await DBProvider.db.insertOrReplace(DBSchema.tableFriends, {
-            'id': '${DateTime.now().millisecondsSinceEpoch}_$toUid',
-            'name': toName,
-            'email': toEmail,
-            'alias': '',
-            'logo': chosenLogo,
-            'firebase_uid': toUid,
-          });
-          debugPrint('👥 Amigo añadido: $toName con logo $chosenLogo');
-        }
-
-        // Marcar como 'synced' para que no se vuelva a procesar nunca más.
-        // Si la amistad se elimina después, delete() lo marcará como 'removed'.
-        await doc.reference.update({'status': 'synced'});
-      }
-    } catch (e) {
-      debugPrint('❌ Error pull accepted requests: $e');
     }
   }
 
@@ -240,7 +180,6 @@ class FirebaseSyncService {
           .where('owner_id', isEqualTo: uid)
           .get();
       if (snap.docs.isEmpty) return;
-
       final rows = snap.docs.map((d) {
         final data = d.data();
         return {
@@ -252,33 +191,75 @@ class FirebaseSyncService {
           'firebase_uid': data['friend_uid'],
         };
       }).toList();
-
       await DBProvider.db.batchInsert(DBSchema.tableFriends, rows);
-      debugPrint('📥 ${rows.length} amigos sincronizados');
     } catch (e) {
       debugPrint('❌ Error pull friends: $e');
     }
   }
 
+  // ── Pull: Solicitudes aceptadas ───────────────────────────────────────────
+
+  Future<void> pullAcceptedRequests(String uid) async {
+    try {
+      final snap = await _db
+          .collection('friend_requests')
+          .where('from_uid', isEqualTo: uid)
+          .where('status', isEqualTo: 'accepted')
+          .get();
+      if (snap.docs.isEmpty) return;
+
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final toUid = data['to_uid'] as String? ?? '';
+        final toEmail = data['to_email'] as String? ?? '';
+        if (toUid.isEmpty) continue;
+
+        final profileSnap = await _db
+            .collection('user_profiles')
+            .doc(toUid)
+            .get();
+        final toName = (profileSnap.data()?['name'] as String?) ?? toEmail;
+
+        final existing = await DBProvider.db.query(
+          DBSchema.tableFriends,
+          where: 'firebase_uid = ?',
+          whereArgs: [toUid],
+        );
+        if (existing.isEmpty) {
+          final logo = (data['from_logo'] as String?)?.isNotEmpty == true
+              ? data['from_logo'] as String
+              : '😊';
+          await DBProvider.db.insertOrReplace(DBSchema.tableFriends, {
+            'id': '${DateTime.now().millisecondsSinceEpoch}_$toUid',
+            'name': toName,
+            'email': toEmail,
+            'alias': '',
+            'logo': logo,
+            'firebase_uid': toUid,
+          });
+        }
+        await doc.reference.update({'status': 'synced'});
+      }
+    } catch (e) {
+      debugPrint('❌ Error pull accepted requests: $e');
+    }
+  }
+
   // ══════════════════════════════════════════════════════════════════════════
-  // PUSH — SQLite → Firebase  (se llama en cada escritura)
+  // PUSH — SQLite → Firebase
   // ══════════════════════════════════════════════════════════════════════════
 
   // ── Push: Evento ──────────────────────────────────────────────────────────
 
   Future<void> pushEvent(EventItem event, DateTime date) async {
-    if (event.id == null) return;
-    if (event.soloParaMi) return; // nunca sube a Firebase
-
+    if (event.id == null || event.soloParaMi) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
     try {
-      // Obtener los UIDs con los que compartir esta categoría
-      // leyendo la configuración en calendar_shares/{uid}_*
       final sharedWithUids = await _getSharedWithUids(uid, event.category.name);
-
       final dayUtc = DateTime.utc(date.year, date.month, date.day);
+
       await _db.collection('events').doc(event.id).set({
         'title': event.title,
         'description': event.description,
@@ -301,70 +282,75 @@ class FirebaseSyncService {
         ),
         'solo_para_mi': false,
         'updated_at': FieldValue.serverTimestamp(),
+        // checklist_items se actualiza justo después con pushChecklistToEvent
       }, SetOptions(merge: true));
-      debugPrint(
-        '📤 Evento subido: \${event.id} → shared_with: \$sharedWithUids',
-      );
+
+      debugPrint('📤 Evento: ${event.id} → shared_with: $sharedWithUids');
     } catch (e) {
-      debugPrint('❌ Error push event: \$e');
+      debugPrint('❌ Error push event: $e');
     }
   }
 
-  /// Lee todos los documentos calendar_shares donde from_uid == uid
-  /// y devuelve los to_uid que tengan la categoría del evento en su lista.
-  Future<List<String>> _getSharedWithUids(
-    String uid,
-    String categoryName,
+  // ── Push: Checklist embebido en el evento ─────────────────────────────────
+  //
+  // Llama a este método DESPUÉS de pushEvent.
+  // Usa merge:false en checklist_items para reemplazar la lista completa.
+
+  Future<void> pushChecklistToEvent(
+    String eventId,
+    List<Map<String, dynamic>> items,
   ) async {
     try {
-      final snap = await _db
-          .collection('calendar_shares')
-          .where('from_uid', isEqualTo: uid)
-          .get();
-
-      if (snap.docs.isEmpty) return [];
-
-      final List<String> result = [];
-      for (final doc in snap.docs) {
-        final data = doc.data();
-        final toUid = data['to_uid'] as String? ?? '';
-        final categories = List<String>.from(data['categories'] ?? []);
-        if (toUid.isEmpty) continue;
-
-        // Comparar categoría del evento con las configuradas (insensible a mayúsculas)
-        final catLower = categoryName.toLowerCase();
-        final matches = categories.any((c) {
-          final cl = c.toLowerCase();
-          // Mapeo entre nombres del enum Dart y las claves del diálogo
-          if (catLower == 'laboral' && (cl == 'trabajo' || cl == 'laboral'))
-            return true;
-          if (catLower == 'evento' && (cl == 'eventos' || cl == 'evento'))
-            return true;
-          if (catLower == 'cita' && (cl == 'citas' || cl == 'cita'))
-            return true;
-          if (catLower == 'recordatorio' &&
-              (cl == 'recordatorios' || cl == 'recordatorio'))
-            return true;
-          if (catLower == 'bebe' && cl == 'bebe') return true;
-          if (catLower == 'periodo' && cl == 'periodo') return true;
-          return cl == catLower;
-        });
-
-        if (matches) result.add(toUid);
+      final Map<String, dynamic> checklistMap = {};
+      for (final item in items) {
+        final id = item['id'] as String;
+        checklistMap[id] = {
+          'text': item['text'],
+          'is_checked': false,
+          'position': item['position'],
+        };
       }
-      return result;
+
+      // update() en vez de set() para no sobreescribir shared_with, etc.
+      await _db.collection('events').doc(eventId).update({
+        'checklist_items': checklistMap,
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+
+      debugPrint(
+        '📤 Checklist embebido en evento $eventId (${items.length} items)',
+      );
     } catch (e) {
-      debugPrint('⚠️ Error leyendo calendar_shares: \$e');
-      return [];
+      debugPrint('❌ Error push checklist to event: $e');
+    }
+  }
+
+  // ── Push: Toggle check de un item ─────────────────────────────────────────
+  //
+  // Actualiza SOLO el campo is_checked dentro del mapa.
+  // El receptor lo recibe via el listener de eventos (sin colección extra).
+
+  Future<void> pushChecklistItemChecked(
+    String eventId,
+    String itemId,
+    bool isChecked,
+  ) async {
+    try {
+      await _db.collection('events').doc(eventId).update({
+        'checklist_items.$itemId.is_checked': isChecked,
+        'updated_at': FieldValue.serverTimestamp(),
+      });
+      debugPrint('📤 Check: evento=$eventId item=$itemId → $isChecked');
+    } catch (e) {
+      debugPrint('❌ Error push check: $e');
     }
   }
 
   Future<void> deleteEvent(String eventId) async {
     try {
       await _db.collection('events').doc(eventId).delete();
-      debugPrint('🗑️ Evento eliminado de Firebase: $eventId');
     } catch (e) {
-      debugPrint('❌ Error delete event Firebase: $e');
+      debugPrint('❌ Error delete event: $e');
     }
   }
 
@@ -374,7 +360,6 @@ class FirebaseSyncService {
     if (shift.id == null) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-
     try {
       await _db.collection('shifts').doc(shift.id).set({
         'name': shift.name,
@@ -386,7 +371,6 @@ class FirebaseSyncService {
         'owner_id': uid,
         'updated_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      debugPrint('📤 Turno subido: ${shift.id}');
     } catch (e) {
       debugPrint('❌ Error push shift: $e');
     }
@@ -396,11 +380,9 @@ class FirebaseSyncService {
     try {
       await _db.collection('shifts').doc(shiftId).delete();
     } catch (e) {
-      debugPrint('❌ Error delete shift Firebase: $e');
+      debugPrint('❌ Error delete shift: $e');
     }
   }
-
-  // ── Push: Asignación de turno ─────────────────────────────────────────────
 
   Future<void> pushShiftAssignment(
     String id,
@@ -410,15 +392,12 @@ class FirebaseSyncService {
   }) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-
     try {
-      // Obtener UIDs con los que compartir turnos
       final sharedWith = await _getSharedWithUids(uid, 'turnos');
       final fromMin = shift != null
           ? shift.from.hour * 60 + shift.from.minute
           : 0;
       final toMin = shift != null ? shift.to.hour * 60 + shift.to.minute : 0;
-
       await _db.collection('shift_assignments').doc(id).set({
         'shift_id': shiftId,
         'date': Timestamp.fromDate(
@@ -426,14 +405,12 @@ class FirebaseSyncService {
         ),
         'owner_id': uid,
         'shared_with': sharedWith,
-        // Datos desnormalizados para que el receptor pueda mostrarlo
         'shift_name': shift?.name ?? '',
         'shift_color': shift?.color.value ?? 0xFF2196F3,
         'shift_from_minutes': fromMin,
         'shift_to_minutes': toMin,
         'updated_at': FieldValue.serverTimestamp(),
       });
-      debugPrint('📤 Asignación subida: $id → shared_with: $sharedWith');
     } catch (e) {
       debugPrint('❌ Error push shift_assignment: $e');
     }
@@ -454,63 +431,18 @@ class FirebaseSyncService {
             ),
           )
           .get();
-      for (final doc in snap.docs) await doc.reference.delete();
-    } catch (e) {
-      debugPrint('❌ Error delete shift_assignment Firebase: $e');
-    }
-  }
-
-  // ── Push: Checklist items ─────────────────────────────────────────────────
-
-  Future<void> pushChecklistItems(
-    String eventId,
-    List<Map<String, dynamic>> items,
-  ) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) return;
-
-    try {
-      // Borrar items anteriores del evento
-      final old = await _db
-          .collection('checklist_items')
-          .where('event_id', isEqualTo: eventId)
-          .get();
-      final batch = _db.batch();
-      for (final doc in old.docs) batch.delete(doc.reference);
-
-      // Insertar nuevos
-      for (final item in items) {
-        final ref = _db.collection('checklist_items').doc();
-        batch.set(ref, {...item, 'event_id': eventId, 'owner_id': uid});
+      for (final doc in snap.docs) {
+        await doc.reference.delete();
       }
-      await batch.commit();
-      debugPrint('📤 Checklist subido para evento $eventId');
     } catch (e) {
-      debugPrint('❌ Error push checklist: $e');
+      debugPrint('❌ Error delete shift_assignment: $e');
     }
   }
-
-  Future<void> deleteChecklistForEvent(String eventId) async {
-    try {
-      final snap = await _db
-          .collection('checklist_items')
-          .where('event_id', isEqualTo: eventId)
-          .get();
-      final batch = _db.batch();
-      for (final doc in snap.docs) batch.delete(doc.reference);
-      await batch.commit();
-    } catch (e) {
-      debugPrint('❌ Error delete checklist Firebase: $e');
-    }
-  }
-
-  // ── Push: Amigo ───────────────────────────────────────────────────────────
 
   Future<void> pushFriend(FriendModel friend) async {
     if (friend.id == null) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
-
     try {
       await _db.collection('friends').doc(friend.id).set({
         'name': friend.name,
@@ -521,7 +453,6 @@ class FirebaseSyncService {
         'owner_id': uid,
         'updated_at': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      debugPrint('📤 Amigo subido: ${friend.id}');
     } catch (e) {
       debugPrint('❌ Error push friend: $e');
     }
@@ -531,21 +462,20 @@ class FirebaseSyncService {
     try {
       await _db.collection('friends').doc(friendId).delete();
     } catch (e) {
-      debugPrint('❌ Error delete friend Firebase: $e');
+      debugPrint('❌ Error delete friend: $e');
     }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // LISTENER — Eventos compartidos en tiempo real
+  // LISTENER — Tiempo real
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// [onSharedEventReceived] se llama tras cada cambio de evento compartido.
-  /// Úsalo para refrescar la UI (p.ej. recargar el mes en CalendarScreen).
   void startListening(String uid, {VoidCallback? onSharedEventReceived}) {
-    stopListening(); // cancelar listeners anteriores
+    stopListening();
 
-    // Escuchar eventos donde el usuario está en shared_with
-    final sub = _db
+    // Listener de eventos compartidos.
+    // Cada snapshot ya trae checklist_items embebido → sin consulta extra.
+    final subEvents = _db
         .collection('events')
         .where('shared_with', arrayContains: uid)
         .snapshots()
@@ -579,29 +509,34 @@ class FirebaseSyncService {
                   'notification_at': null,
                   'solo_para_mi': 0,
                 });
-                debugPrint(
-                  '🔴 Evento compartido actualizado: ${change.doc.id}',
+                // Checklist embebido → se guarda directamente del snapshot
+                await _saveEmbeddedChecklist(
+                  change.doc.id,
+                  data['checklist_items'],
                 );
                 changed = true;
                 break;
+
               case DocumentChangeType.removed:
                 await DBProvider.db.delete(
                   DBSchema.tableEvents,
                   where: 'id = ?',
                   whereArgs: [change.doc.id],
                 );
-                debugPrint('🔴 Evento compartido eliminado: ${change.doc.id}');
+                await DBProvider.db.delete(
+                  DBSchema.tableChecklist,
+                  where: 'event_id = ?',
+                  whereArgs: [change.doc.id],
+                );
                 changed = true;
                 break;
             }
           }
-          // Notificar a la UI solo si hubo cambios reales
           if (changed) onSharedEventReceived?.call();
         }, onError: (e) => debugPrint('❌ Error listener eventos: $e'));
 
-    _subscriptions.add(sub);
+    _subscriptions.add(subEvents);
 
-    // Listener para turnos compartidos
     final subShifts = _db
         .collection('shift_assignments')
         .where('shared_with', arrayContains: uid)
@@ -641,12 +576,80 @@ class FirebaseSyncService {
         }, onError: (e) => debugPrint('❌ Error listener turnos: $e'));
 
     _subscriptions.add(subShifts);
-    debugPrint('👂 Listeners activos (eventos + turnos compartidos)');
+    debugPrint('👂 Listeners activos');
+  }
+
+  Future<void> _saveEmbeddedChecklist(String eventId, dynamic rawItems) async {
+    try {
+      final itemsMap = rawItems as Map<String, dynamic>? ?? {};
+      if (itemsMap.isEmpty) return;
+
+      await DBProvider.db.delete(
+        DBSchema.tableChecklist,
+        where: 'event_id = ?',
+        whereArgs: [eventId],
+      );
+
+      final rows = itemsMap.entries.map((e) {
+        final item = e.value as Map<String, dynamic>;
+        return {
+          'id': e.key,
+          'event_id': eventId,
+          'text': item['text'] ?? '',
+          'is_checked': (item['is_checked'] ?? false) ? 1 : 0,
+          'position': item['position'] ?? 0,
+        };
+      }).toList();
+
+      await DBProvider.db.batchInsert(DBSchema.tableChecklist, rows);
+      debugPrint('📥 ${rows.length} checklist items → evento $eventId');
+    } catch (e) {
+      debugPrint('❌ Error guardando checklist embebido: $e');
+    }
   }
 
   void stopListening() {
     for (final sub in _subscriptions) sub.cancel();
     _subscriptions.clear();
-    debugPrint('🔇 Listeners detenidos');
+  }
+
+  Future<List<String>> _getSharedWithUids(
+    String uid,
+    String categoryName,
+  ) async {
+    try {
+      final snap = await _db
+          .collection('calendar_shares')
+          .where('from_uid', isEqualTo: uid)
+          .get();
+      final result = <String>[];
+      for (final doc in snap.docs) {
+        final data = doc.data();
+        final toUid = data['to_uid'] as String? ?? '';
+        final categories = List<String>.from(data['categories'] ?? []);
+        if (toUid.isEmpty) continue;
+        final catLower = categoryName.toLowerCase();
+        final matches = categories.any((c) {
+          final cl = c.toLowerCase();
+          if (catLower == 'laboral' && (cl == 'trabajo' || cl == 'laboral'))
+            return true;
+          if (catLower == 'evento' && (cl == 'eventos' || cl == 'evento'))
+            return true;
+          if (catLower == 'cita' && (cl == 'citas' || cl == 'cita'))
+            return true;
+          if (catLower == 'recordatorio' &&
+              (cl == 'recordatorios' || cl == 'recordatorio'))
+            return true;
+          if (catLower == 'bebe' && cl == 'bebe') return true;
+          if (catLower == 'periodo' && cl == 'periodo') return true;
+          return cl == catLower;
+        });
+        if (matches) result.add(toUid);
+      }
+      return result;
+    } catch (e) {
+      debugPrint('⚠️ Error calendar_shares: $e');
+      return [];
+    }
   }
 }

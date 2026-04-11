@@ -9,7 +9,7 @@ import 'day_view.dart'; // AddEventDialog
 
 class ChecklistDetailPage extends StatefulWidget {
   final EventItem event;
-  final DateTime date; // necesario para guardar edición
+  final DateTime date;
 
   const ChecklistDetailPage({Key? key, required this.event, required this.date})
     : super(key: key);
@@ -19,7 +19,7 @@ class ChecklistDetailPage extends StatefulWidget {
 }
 
 class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
-  late EventItem _event; // copia mutable local
+  late EventItem _event;
   List<ChecklistItem> _items = [];
   bool _loading = true;
 
@@ -51,13 +51,20 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
 
   Future<void> _toggleItem(int index) async {
     final item = _items[index];
-    if (item.id == null) return;
+    if (item.id == null || _event.id == null) return;
     final newValue = !item.isChecked;
+    // Optimistic update en UI
     setState(() => _items[index] = item.copyWith(isChecked: newValue));
     try {
-      await ChecklistRepository.instance.updateChecked(item.id!, newValue);
+      // CORRECCIÓN: se pasa eventId para poder actualizar en Firestore
+      await ChecklistRepository.instance.updateChecked(
+        item.id!,
+        _event.id!, // ← eventId necesario para el campo embebido
+        newValue,
+      );
     } catch (e) {
-      if (mounted) setState(() => _items[index] = item); // revertir
+      // Revertir si falla
+      if (mounted) setState(() => _items[index] = item);
       debugPrint('Error actualizando item: $e');
     }
   }
@@ -65,7 +72,6 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
   // ── Editar ─────────────────────────────────────────────────────────────────
 
   Future<void> _openEdit() async {
-    // Prerrellenar el diálogo con los datos actuales
     final existingItemTexts = _items.map((i) => i.text).toList();
 
     final result = await showDialog<Map<String, dynamic>?>(
@@ -77,7 +83,6 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
     );
     if (result == null || !mounted) return;
 
-    // Construir evento actualizado
     final categoryStr = result['category'] as String? ?? 'Eventos';
     final category = EventRepository.categoryFromString(categoryStr);
     final tipo = (result['tipo'] as Tipo?) ?? Tipo.Otros;
@@ -94,6 +99,11 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
       from: result['start'] as TimeOfDay,
       to: result['end'] as TimeOfDay,
       color: EventRepository.colorForCategory(category),
+      hasAlarm: (result['hasAlarm'] as bool?) ?? _event.hasAlarm,
+      alarmAt: result['alarmAt'] as DateTime? ?? _event.alarmAt,
+      hasNotification: (result['hasNotif'] as bool?) ?? _event.hasNotification,
+      notificationAt: result['notifAt'] as DateTime? ?? _event.notificationAt,
+      soloParaMi: (result['soloParaMi'] as bool?) ?? _event.soloParaMi,
     );
 
     try {
@@ -107,7 +117,6 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
           final items = (result['checklistItems'] as List<String>?) ?? [];
           await ChecklistRepository.instance.saveAll(saved.id!, items);
         } else {
-          // Ya no es Checklist → borrar items
           await ChecklistRepository.instance.deleteAllForEvent(saved.id!);
         }
       }
@@ -184,13 +193,11 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
           ],
         ),
         actions: [
-          // ── Editar ────────────────────────────────────────────────────────
           IconButton(
             icon: const Icon(Icons.edit_outlined),
             tooltip: 'Editar evento',
             onPressed: _openEdit,
           ),
-          // ── Borrar ────────────────────────────────────────────────────────
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.redAccent),
             tooltip: 'Borrar evento',
@@ -233,7 +240,6 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
                         ),
                       ],
                       const SizedBox(height: 10),
-                      // ── Barra de progreso ──────────────────────────────────
                       Row(
                         children: [
                           Expanded(
@@ -264,7 +270,7 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
                   ),
                 ),
 
-                // ── Lista de items ────────────────────────────────────────────
+                // ── Lista ────────────────────────────────────────────────────
                 Expanded(
                   child: _items.isEmpty
                       ? Center(
@@ -315,7 +321,7 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
                         ),
                 ),
 
-                // ── Pie ───────────────────────────────────────────────────────
+                // ── Pie ──────────────────────────────────────────────────────
                 if (total > 0)
                   SafeArea(
                     child: Padding(

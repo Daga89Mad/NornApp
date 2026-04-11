@@ -3,6 +3,7 @@
 import 'dart:math';
 import '../models/checklist_item.dart';
 import 'db_provider.dart';
+import 'firebase_sync_service.dart';
 
 class ChecklistRepository {
   ChecklistRepository._();
@@ -18,14 +19,6 @@ class ChecklistRepository {
     ).join();
     return '${DateTime.now().millisecondsSinceEpoch}_$suffix';
   }
-
-  Map<String, dynamic> _toMap(ChecklistItem item) => {
-    'id': item.id ?? _generateId(),
-    'event_id': item.eventId,
-    'text': item.text,
-    'is_checked': item.isChecked ? 1 : 0,
-    'position': item.position,
-  };
 
   ChecklistItem _fromMap(Map<String, dynamic> m) => ChecklistItem(
     id: m['id'] as String?,
@@ -49,27 +42,45 @@ class ChecklistRepository {
 
   // ── Escritura ──────────────────────────────────────────────────────────────
 
-  /// Guarda una lista de textos como items de un evento.
-  /// Borra los anteriores y los reinserta en orden.
+  /// Guarda la lista de textos como items del evento en SQLite y en Firestore
+  /// (embebidos dentro del documento del evento para sincronización fiable).
   Future<void> saveAll(String eventId, List<String> texts) async {
-    await deleteAllForEvent(eventId);
+    // Borrar items anteriores solo en SQLite
+    // (Firestore se actualiza con el mapa completo a continuación)
+    await DBProvider.db.delete(
+      _table,
+      where: 'event_id = ?',
+      whereArgs: [eventId],
+    );
+
     final rows = texts.asMap().entries.map((e) {
-      final id = _generateId();
       return {
-        'id': id,
+        'id': _generateId(),
         'event_id': eventId,
         'text': e.value,
         'is_checked': 0,
         'position': e.key,
       };
     }).toList();
+
     if (rows.isNotEmpty) {
+      // 1. SQLite local
       await DBProvider.db.batchInsert(_table, rows);
+
+      // 2. Firestore: embebidos en el doc del evento
+      //    Sin race condition ni índice extra necesario
+      await FirebaseSyncService.instance.pushChecklistToEvent(eventId, rows);
     }
   }
 
-  /// Cambia el estado checked de un item.
-  Future<void> updateChecked(String itemId, bool isChecked) async {
+  /// Marca/desmarca un item tanto en SQLite como en Firestore.
+  /// Requiere el eventId para actualizar el campo correcto en el doc del evento.
+  Future<void> updateChecked(
+    String itemId,
+    String eventId,
+    bool isChecked,
+  ) async {
+    // 1. SQLite local
     final db = await DBProvider.db.database;
     await db.update(
       _table,
@@ -77,18 +88,30 @@ class ChecklistRepository {
       where: 'id = ?',
       whereArgs: [itemId],
     );
+
+    // 2. Firestore: actualiza solo el campo is_checked del item en el evento
+    await FirebaseSyncService.instance.pushChecklistItemChecked(
+      eventId,
+      itemId,
+      isChecked,
+    );
   }
 
-  /// Elimina todos los items de un evento (útil al borrar el evento).
+  /// Elimina todos los items de un evento.
   Future<void> deleteAllForEvent(String eventId) async {
     await DBProvider.db.delete(
       _table,
       where: 'event_id = ?',
       whereArgs: [eventId],
     );
+    // En Firestore borramos el campo checklist_items del evento
+    // (no hay colección separada que limpiar)
+    try {
+      await FirebaseSyncService.instance.pushChecklistToEvent(eventId, []);
+    } catch (_) {}
   }
 
-  /// Elimina un item concreto.
+  /// Elimina un item concreto localmente.
   Future<void> deleteItem(String itemId) async {
     await DBProvider.db.delete(_table, where: 'id = ?', whereArgs: [itemId]);
   }

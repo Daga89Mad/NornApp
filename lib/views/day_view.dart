@@ -41,21 +41,49 @@ class _DayViewState extends State<DayView> {
   }
 
   Future<void> _loadAll() async {
-    setState(() => _isLoading = true);
-    // Sembrar contenido diario si las tablas están vacías
-    await FunContentRepository.instance.seedIfEmpty();
-    try {
-      // Sembrar turnos por defecto si la tabla está vacía
-      await ShiftRepository.instance.seedDefaults();
+    if (mounted) setState(() => _isLoading = true);
 
-      final results = await Future.wait([
-        EventRepository.instance.getEventsForDay(widget.date),
-        ShiftRepository.instance.getAll(),
-        ShiftAssignmentRepository.instance.getAssignedShiftIds(widget.date),
-      ]);
-      final sharedShifts = await ShiftAssignmentRepository.instance
-          .getSharedShiftsForDay(widget.date);
-      final friends = await FriendRepository.instance.getAll();
+    try {
+      // Seeds no críticos: si fallan, no bloquean la carga de eventos
+      try {
+        await FunContentRepository.instance.seedIfEmpty();
+      } catch (e) {
+        debugPrint('⚠️ seedIfEmpty error (ignorado): $e');
+      }
+
+      try {
+        await ShiftRepository.instance.seedDefaults();
+      } catch (e) {
+        debugPrint('⚠️ seedDefaults error (ignorado): $e');
+      }
+
+      // Carga paralela de datos principales con timeout de seguridad
+      final results =
+          await Future.wait([
+            EventRepository.instance.getEventsForDay(widget.date),
+            ShiftRepository.instance.getAll(),
+            ShiftAssignmentRepository.instance.getAssignedShiftIds(widget.date),
+          ]).timeout(
+            const Duration(seconds: 10),
+            onTimeout: () => [<EventItem>[], <ShiftModel>[], <String>{}],
+          );
+
+      // Datos secundarios también protegidos individualmente
+      List<SharedShiftInfo> sharedShifts = [];
+      try {
+        sharedShifts = await ShiftAssignmentRepository.instance
+            .getSharedShiftsForDay(widget.date);
+      } catch (e) {
+        debugPrint('⚠️ getSharedShiftsForDay error (ignorado): $e');
+      }
+
+      List<FriendModel> friends = [];
+      try {
+        friends = await FriendRepository.instance.getAll();
+      } catch (e) {
+        debugPrint('⚠️ getAll friends error (ignorado): $e');
+      }
+
       if (mounted) {
         setState(() {
           _events = results[0] as List<EventItem>;
@@ -66,8 +94,9 @@ class _DayViewState extends State<DayView> {
         });
       }
     } catch (e) {
-      debugPrint('Error cargando día: $e');
+      debugPrint('❌ Error cargando día: $e');
     } finally {
+      // Garantizado: siempre se quita el spinner
       if (mounted) setState(() => _isLoading = false);
     }
   }
