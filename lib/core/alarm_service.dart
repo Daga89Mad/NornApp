@@ -1,8 +1,15 @@
 // lib/core/alarm_service.dart
 //
-// Compatible con flutter_local_notifications ^18 (sin uiLocalNotificationDateInterpretation).
-// Android: exactAllowWhileIdle + fullScreenIntent para alarmas reales.
-// iOS:     DarwinNotificationDetails con interruptionLevel timeSensitive.
+// flutter_local_notifications ^18.0.1 — sin flutter_timezone.
+//
+// TRUCO DE TIMEZONE SIN PAQUETE EXTRA:
+//   Dart sabe la hora local del dispositivo nativamente.
+//   fireAt.toUtc() convierte usando el offset del sistema operativo.
+//   Luego creamos un TZDateTime en UTC → el scheduler dispara en el momento exacto.
+//   Ejemplo: usuario en Madrid (UTC+2), alarma a las 14:00 local
+//     → fireAt.toUtc() = 12:00 UTC → TZDateTime(UTC, 12:00) → suena a las 14:00 ✓
+
+import 'dart:typed_data'; // Int64List para patrones de vibración
 
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -15,52 +22,83 @@ class AlarmService {
   AlarmService._();
   static final AlarmService instance = AlarmService._();
 
-  final FlutterLocalNotificationsPlugin _plugin =
+  /// Instancia compartida con PushNotificationService.
+  static final FlutterLocalNotificationsPlugin plugin =
       FlutterLocalNotificationsPlugin();
 
   bool _initialized = false;
 
-  // ── Canales ────────────────────────────────────────────────────────────────
+  // ── IDs de canales ────────────────────────────────────────────────────────
 
-  static const _alarmChannelId = 'fc_alarms';
-  static const _alarmChannelName = 'Alarmas';
-  static const _notifChannelId = 'fc_notifications';
-  static const _notifChannelName = 'Notificaciones de eventos';
+  static const _alarmChannelId = 'nornapp_alarms';
+  static const _alarmChannelName = 'Alarmas NornApp';
+  static const _notifChannelId = 'nornapp_reminders';
+  static const _notifChannelName = 'Recordatorios NornApp';
 
-  // ── Init ───────────────────────────────────────────────────────────────────
+  // ── Inicialización ────────────────────────────────────────────────────────
 
   Future<void> init() async {
     if (_initialized) return;
 
+    // Solo necesitamos registrar todas las zonas horarias del paquete timezone.
+    // La conversión real la hace Dart con .toUtc() (usa el offset del SO).
     tz.initializeTimeZones();
 
-    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const ios = DarwinInitializationSettings(
+    // Inicializar plugin
+    const androidInit = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const iosInit = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
       requestSoundPermission: false,
     );
 
-    await _plugin.initialize(
-      const InitializationSettings(android: android, iOS: ios),
+    await plugin.initialize(
+      const InitializationSettings(android: androidInit, iOS: iosInit),
       onDidReceiveNotificationResponse: _onTap,
+      onDidReceiveBackgroundNotificationResponse: _onBackgroundTap,
     );
 
-    // Permisos Android 13+
-    final androidImpl = _plugin
+    // Canales Android (idempotente)
+    final androidImpl = plugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
         >();
+
+    await androidImpl?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _alarmChannelId,
+        _alarmChannelName,
+        description: 'Alarmas programadas de NornApp',
+        importance: Importance.max,
+        playSound: true,
+        enableVibration: true,
+        enableLights: true,
+        ledColor: Color(0xFF5C6BC0),
+      ),
+    );
+
+    await androidImpl?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _notifChannelId,
+        _notifChannelName,
+        description: 'Recordatorios de eventos de NornApp',
+        importance: Importance.high,
+        playSound: true,
+        enableVibration: true,
+      ),
+    );
+
+    // Permisos Android 13+
     await androidImpl?.requestNotificationsPermission();
     await androidImpl?.requestExactAlarmsPermission();
 
     _initialized = true;
-    debugPrint('AlarmService inicializado');
+    debugPrint('✅ AlarmService inicializado');
   }
 
-  /// Pide permiso explícito en iOS (llamar tras login).
+  /// Pide permisos en iOS — llamar justo después del login.
   Future<bool> requestIosPermission() async {
-    final iosImpl = _plugin
+    final iosImpl = plugin
         .resolvePlatformSpecificImplementation<
           IOSFlutterLocalNotificationsPlugin
         >();
@@ -72,11 +110,7 @@ class AlarmService {
     return granted ?? false;
   }
 
-  void _onTap(NotificationResponse r) {
-    debugPrint('Notificación pulsada id=${r.id} payload=${r.payload}');
-  }
-
-  // ── Scheduling ─────────────────────────────────────────────────────────────
+  // ── Programar ─────────────────────────────────────────────────────────────
 
   Future<void> schedule({
     required String eventId,
@@ -87,37 +121,46 @@ class AlarmService {
   }) async {
     if (!_initialized) await init();
 
-    final tzFireAt = tz.TZDateTime.from(fireAt, tz.local);
-    if (tzFireAt.isBefore(tz.TZDateTime.now(tz.local))) {
-      debugPrint('⚠️ Fecha en el pasado, alarma no programada: $fireAt');
+    // Convertir la hora local del usuario a UTC usando el offset del SO.
+    // Si fireAt ya es UTC (.isUtc == true), .toUtc() no hace nada.
+    // Si es local, .toUtc() aplica el offset del dispositivo correctamente.
+    final utc = fireAt.toUtc();
+    final tzFireAt = tz.TZDateTime.from(utc, tz.UTC);
+    final tzNow = tz.TZDateTime.now(tz.UTC);
+
+    if (tzFireAt.isBefore(tzNow)) {
+      debugPrint('⚠️ Fecha en el pasado, ${type.name} no programada: $fireAt');
       return;
     }
 
     final notifId = _notifId(eventId, type);
     final details = type == AlarmType.alarm ? _alarmDetails() : _notifDetails();
 
-    // ⚠️ En flutter_local_notifications ^18 se eliminó
-    // uiLocalNotificationDateInterpretation — no incluir.
-    await _plugin.zonedSchedule(
+    await plugin.zonedSchedule(
       notifId,
       title,
       body,
       tzFireAt,
       details,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      // Requerido en versiones anteriores a v18 — usa la fecha/hora exacta
-      // que pasamos (no interpreta como hora relativa al día).
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
       payload: eventId,
     );
 
-    debugPrint('✅ ${type.name} programada (id=$notifId) para $fireAt');
+    final diff = tzFireAt.difference(tzNow);
+    debugPrint(
+      '✅ ${type.name} programada id=$notifId '
+      'local=$fireAt UTC=${utc.toIso8601String()} '
+      '(en ${diff.inMinutes} min)',
+    );
   }
+
+  // ── Cancelar ──────────────────────────────────────────────────────────────
 
   Future<void> cancel(String eventId, AlarmType type) async {
     if (!_initialized) await init();
-    await _plugin.cancel(_notifId(eventId, type));
+    await plugin.cancel(_notifId(eventId, type));
     debugPrint('🗑️ ${type.name} cancelada para $eventId');
   }
 
@@ -126,43 +169,55 @@ class AlarmService {
     await cancel(eventId, AlarmType.notification);
   }
 
-  // ── Detalles de notificación ───────────────────────────────────────────────
+  // ── Detalles de notificación ──────────────────────────────────────────────
 
-  NotificationDetails _alarmDetails() => const NotificationDetails(
+  NotificationDetails _alarmDetails() => NotificationDetails(
     android: AndroidNotificationDetails(
       _alarmChannelId,
       _alarmChannelName,
-      channelDescription: 'Alarmas programadas para eventos',
+      channelDescription: 'Alarmas programadas de NornApp',
       importance: Importance.max,
       priority: Priority.max,
       playSound: true,
       enableVibration: true,
+      // 0ms espera → vibra 800ms → pausa 400ms → vibra 800ms
+      vibrationPattern: Int64List.fromList([0, 800, 400, 800]),
+      // Muestra pantalla completa aunque el móvil esté bloqueado
+      // Requiere USE_FULL_SCREEN_INTENT en AndroidManifest.xml
       fullScreenIntent: true,
       category: AndroidNotificationCategory.alarm,
       visibility: NotificationVisibility.public,
+      // audioAttributesUsage.alarm: el sistema lo trata como despertador,
+      // suena aunque el teléfono esté en modo silencio/vibración
+      audioAttributesUsage: AudioAttributesUsage.alarm,
+      autoCancel: true,
     ),
-    iOS: DarwinNotificationDetails(
+    iOS: const DarwinNotificationDetails(
       sound: 'default',
       presentAlert: true,
       presentBadge: true,
       presentSound: true,
+      // timeSensitive rompe Focus Mode en iOS 15+
       interruptionLevel: InterruptionLevel.timeSensitive,
     ),
   );
 
-  NotificationDetails _notifDetails() => const NotificationDetails(
+  NotificationDetails _notifDetails() => NotificationDetails(
     android: AndroidNotificationDetails(
       _notifChannelId,
       _notifChannelName,
-      channelDescription: 'Recordatorios de eventos del calendario',
+      channelDescription: 'Recordatorios de eventos de NornApp',
       importance: Importance.high,
       priority: Priority.high,
       playSound: true,
       enableVibration: true,
+      // Vibración más suave para recordatorios
+      vibrationPattern: Int64List.fromList([0, 300, 200, 300]),
       category: AndroidNotificationCategory.reminder,
       visibility: NotificationVisibility.private,
+      autoCancel: true,
     ),
-    iOS: DarwinNotificationDetails(
+    iOS: const DarwinNotificationDetails(
       sound: 'default',
       presentAlert: true,
       presentBadge: true,
@@ -171,10 +226,22 @@ class AlarmService {
     ),
   );
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   int _notifId(String eventId, AlarmType type) {
     final base = eventId.hashCode.abs() % 500000000;
     return type == AlarmType.alarm ? base : base + 500000000;
   }
+}
+
+// ── Callbacks top-level (flutter_local_notifications lo requiere así) ─────────
+
+@pragma('vm:entry-point')
+void _onTap(NotificationResponse r) {
+  debugPrint('👆 Notificación pulsada id=${r.id} payload=${r.payload}');
+}
+
+@pragma('vm:entry-point')
+void _onBackgroundTap(NotificationResponse r) {
+  debugPrint('👆 Background tap id=${r.id}');
 }

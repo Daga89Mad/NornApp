@@ -1,15 +1,15 @@
 // lib/views/loginBody.dart
 
-import 'package:familycalendar/core/firebaseCrudService.dart';
+import 'package:nornapp/core/firebaseCrudService.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:familycalendar/views/menu.dart';
-import 'package:familycalendar/views/registerScreen.dart';
+import 'package:nornapp/views/menu.dart';
+import 'package:nornapp/views/registerScreen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:familycalendar/core/db_provider.dart';
-import 'package:familycalendar/core/firebase_sync_service.dart';
-import 'package:familycalendar/core/push_notification_service.dart';
+import 'package:nornapp/core/db_provider.dart';
+import 'package:nornapp/core/firebase_sync_service.dart';
+import 'package:nornapp/core/push_notification_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class LoginBody extends StatefulWidget {
@@ -144,11 +144,11 @@ class _LoginBodyState extends State<LoginBody> {
             child: Column(
               children: [
                 Image.asset(
-                  'assets/images/logo.png',
-                  height: 120,
+                  'assets/images/LogoGrande.png',
+                  height: 220,
                   fit: BoxFit.contain,
                 ),
-                const SizedBox(height: 32),
+                const SizedBox(height: 1),
 
                 // Email
                 TextField(

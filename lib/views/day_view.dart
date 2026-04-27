@@ -30,6 +30,7 @@ class _DayViewState extends State<DayView> {
   List<SharedShiftInfo> _sharedShifts = [];
   List<FriendModel> _cachedFriends = [];
   bool _isLoading = true;
+  String _myUid = '';
 
   static const double hourHeight = 80.0;
   static const double leftColumnWidth = 70.0;
@@ -37,6 +38,7 @@ class _DayViewState extends State<DayView> {
   @override
   void initState() {
     super.initState();
+    _myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _loadAll();
   }
 
@@ -475,6 +477,27 @@ class _DayViewState extends State<DayView> {
                           Icons.notifications,
                           size: 14,
                           color: ev.color,
+                        ),
+                      ),
+                    // Icono de compartido: aparece cuando el evento es de otro usuario
+                    if (ev.ownerId != null &&
+                        ev.ownerId!.isNotEmpty &&
+                        ev.ownerId != _myUid)
+                      Padding(
+                        padding: const EdgeInsets.only(left: 4),
+                        child: Tooltip(
+                          message: ev.creator.isNotEmpty
+                              ? 'De: ${ev.creator}'
+                              : 'Compartido',
+                          child: CircleAvatar(
+                            radius: 9,
+                            backgroundColor: ev.color.withOpacity(0.25),
+                            child: Icon(
+                              Icons.person,
+                              size: 11,
+                              color: ev.color,
+                            ),
+                          ),
                         ),
                       ),
                   ],

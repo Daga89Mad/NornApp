@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../models/event_item.dart';
 import '../models/shift_model.dart';
 import '../core/event_repository.dart';
+import '../core/shift_repository.dart';
 import '../core/shift_assignment_repository.dart'
     show ShiftAssignmentRepository, SharedShiftInfo;
 import 'package:firebase_auth/firebase_auth.dart';
@@ -38,7 +39,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   bool _filterRecordatorios = true;
   bool _filterBebe = true;
   bool _filterPeriodo = true;
-  bool _filterTurnos = true; // ← nuevo filtro
+  bool _filterTurnos = true;
   bool _compactMode = false;
   String _selectedBgName = 'Blanco';
   String _selectedDesign = 'Predeterminado';
@@ -49,6 +50,17 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Set<String> _hiddenFriendUids = {};
   String? _myUid;
   Map<DateTime, List<SharedShiftInfo>> _sharedShiftsByDay = {};
+
+  // ── Modo asignación masiva de turnos ──────────────────────────────────────
+  ShiftModel? _assigningShift;
+  Set<DateTime> _existingShiftDays = {};
+  Set<DateTime> _pendingDays = {};
+  bool _loadingAssignment = false;
+
+  // ── Altura mínima de celda en modo compacto ───────────────────────────────
+  // 72 px garantiza que caben: número + badge de turno + punto + "+N"
+  // sin overflow. Si la pantalla da más espacio, se usa el mayor.
+  static const double _kMinCompactCellH = 72.0;
 
   final Map<String, Color> _bgOptions = {
     'Blanco': Colors.white,
@@ -83,7 +95,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     await _loadMonth(_focusedMonth);
     await _loadFriendsWithSharedEvents();
 
-    // Registrar callback para refrescar cuando lleguen eventos compartidos
     if (_myUid != null) {
       FirebaseSyncService.instance.startListening(
         _myUid!,
@@ -136,15 +147,12 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Future<void> _loadFriendsWithSharedEvents() async {
     if (_myUid == null) return;
     final allFriends = await FriendRepository.instance.getAll();
-    // Quedarse solo con los amigos que tienen al menos un evento compartido
-    // en el mes actual (owner_id != myUid)
     final Set<String> ownerUids = {};
     for (final events in _events.values) {
       for (final e in events) {
         if (e.ownerId != null && e.ownerId != _myUid) ownerUids.add(e.ownerId!);
       }
     }
-    // También incluir propietarios de turnos compartidos
     for (final shifts in _sharedShiftsByDay.values) {
       for (final s in shifts) {
         ownerUids.add(s.ownerUid);
@@ -158,10 +166,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     if (mounted) setState(() => _friendsWithSharedEvents = withShared);
   }
 
-  /// True si el evento pertenece a otro usuario (evento compartido).
   bool _isSharedEvent(EventItem e) => e.ownerId != null && e.ownerId != _myUid;
 
-  /// Devuelve el FriendModel del propietario del evento (null si es propio).
   FriendModel? _friendForEvent(EventItem e) {
     if (!_isSharedEvent(e)) return null;
     try {
@@ -225,7 +231,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     final key = DateTime.utc(day.year, day.month, day.day);
     final all = _events[key] ?? [];
     return all.where((e) {
-      // Filtro de amigos ocultos
       if (e.ownerId != null && _hiddenFriendUids.contains(e.ownerId)) {
         return false;
       }
@@ -276,9 +281,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
   }
 
   // ── Widget: turno 3D ──────────────────────────────────────────────────────
-  //
-  // Rectángulo con esquinas redondeadas, gradiente y sombra para efecto 3D.
-  // En modo compacto se recorta el texto, en detallado se muestra completo.
 
   Widget _shiftBadge(ShiftModel shift, {bool compact = false}) {
     final c = shift.color;
@@ -328,9 +330,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     );
   }
 
-  // ── Decoración de celda ────────────────────────────────────────────────────
-
-  // ── Badge de turno compartido (con borde rojo + logo del amigo) ──────────────
+  // ── Badge de turno compartido ─────────────────────────────────────────────
 
   Widget _sharedShiftBadge(SharedShiftInfo shift, {bool compact = false}) {
     final c = shift.color;
@@ -352,13 +352,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(6),
-        // Mismo gradiente 3D que los turnos propios
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: [Color.lerp(Colors.white, c, 0.6)!, c.withOpacity(0.85)],
         ),
-        // Borde rojo para indicar que es compartido
         border: Border.all(color: Colors.red.shade400, width: 1.5),
         boxShadow: [
           BoxShadow(
@@ -413,6 +411,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
     );
   }
+
+  // ── Decoración de celda ────────────────────────────────────────────────────
 
   BoxDecoration _cellDecoration({
     required bool isSelected,
@@ -474,8 +474,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
   }
 
-  // ── Popup menus ────────────────────────────────────────────────────────────
-
   // ── Botón filtro de amigos ────────────────────────────────────────────────
 
   Widget _buildFriendFilterButton() {
@@ -534,16 +532,115 @@ class _CalendarScreenState extends State<CalendarScreen> {
     showDialog(context: context, builder: (_) => const ShareCalendarDialog());
   }
 
-  // ── Menú 3 puntos: resumen visual de qué filtros están activos ──────────────
-  //
-  // Cada item muestra:
-  //  - Un círculo de color representativo de la categoría
-  //  - El nombre de la categoría
-  //  - Un check verde si está activo, un guión gris si está oculto
-  // Al pulsar un item se hace toggle del filtro correspondiente.
+  // ── Asignación masiva de turnos ───────────────────────────────────────────
+
+  Future<void> _loadExistingShiftDays(ShiftModel shift) async {
+    setState(() => _loadingAssignment = true);
+    final monthMap = await ShiftAssignmentRepository.instance.getShiftsForMonth(
+      _focusedMonth.year,
+      _focusedMonth.month,
+    );
+    final Set<DateTime> days = {};
+    for (final entry in monthMap.entries) {
+      if (entry.value.any((s) => s.id == shift.id)) {
+        days.add(entry.key);
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _existingShiftDays = days;
+        _pendingDays = Set.from(days);
+        _loadingAssignment = false;
+      });
+    }
+  }
+
+  Future<void> _openShiftAssignmentSheet() async {
+    final shifts = await ShiftRepository.instance.getAll();
+    if (!mounted) return;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _ShiftPickerSheet(
+        shifts: shifts,
+        onSelected: (shift) {
+          Navigator.pop(context);
+          setState(() {
+            _assigningShift = shift;
+            _existingShiftDays = {};
+            _pendingDays = {};
+          });
+          _loadExistingShiftDays(shift);
+        },
+      ),
+    );
+  }
+
+  Future<void> _confirmShiftAssignment() async {
+    final shift = _assigningShift;
+    if (shift?.id == null) return;
+    setState(() => _loadingAssignment = true);
+
+    final toAdd = _pendingDays.difference(_existingShiftDays);
+    final toRemove = _existingShiftDays.difference(_pendingDays);
+
+    for (final day in toAdd) {
+      final assigned = await ShiftAssignmentRepository.instance
+          .getAssignedShiftIds(day);
+      if (!assigned.contains(shift!.id)) {
+        await ShiftAssignmentRepository.instance.toggle(shift.id!, day);
+      }
+    }
+    for (final day in toRemove) {
+      final assigned = await ShiftAssignmentRepository.instance
+          .getAssignedShiftIds(day);
+      if (assigned.contains(shift!.id)) {
+        await ShiftAssignmentRepository.instance.toggle(shift.id!, day);
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        _assigningShift = null;
+        _existingShiftDays = {};
+        _pendingDays = {};
+        _loadingAssignment = false;
+      });
+      await _loadMonth(_focusedMonth);
+    }
+  }
+
+  void _cancelShiftAssignment() {
+    setState(() {
+      _assigningShift = null;
+      _existingShiftDays = {};
+      _pendingDays = {};
+    });
+  }
+
+  Widget _buildAssignShiftButton() {
+    final bool active = _assigningShift != null;
+    return Tooltip(
+      message: 'Asignar turno al mes',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: active ? null : _openShiftAssignmentSheet,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Icon(
+            Icons.edit_calendar_outlined,
+            size: 20,
+            color: active ? Colors.teal : Colors.black54,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ── Menú 3 puntos ──────────────────────────────────────────────────────────
 
   Widget _buildFilterSummaryMenu() {
-    // Definición de cada categoría con su color e icono representativo
     final items = [
       _FilterEntry('Trabajo', Icons.work_outline, Colors.blue, _filterTrabajo, (
         v,
@@ -600,12 +697,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
     ];
 
-    // Cuenta cuántos están desactivados para mostrar badge en el icono
     final hiddenCount = items.where((e) => !e.active).length;
 
     return PopupMenuButton<int>(
       tooltip: 'Filtros activos',
-      // Usamos un builder para poder poner el badge encima del icono
       child: Padding(
         padding: const EdgeInsets.only(top: 4, left: 2),
         child: Stack(
@@ -650,7 +745,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
           child: Row(
             children: [
-              // Círculo de color de categoría
               Container(
                 width: 28,
                 height: 28,
@@ -669,7 +763,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 ),
               ),
               const SizedBox(width: 10),
-              // Nombre
               Expanded(
                 child: Text(
                   entry.label,
@@ -682,7 +775,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                 ),
               ),
-              // Estado: check o guión
               Icon(
                 entry.active ? Icons.check_circle : Icons.remove_circle_outline,
                 size: 18,
@@ -777,112 +869,160 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _selectedDay!.month == date.month &&
         _selectedDay!.day == date.day;
 
+    final utcKey = DateTime.utc(date.year, date.month, date.day);
+    final bool isPending = _pendingDays.contains(utcKey);
+
     void openDay() {
+      if (_assigningShift != null) {
+        if (!isInMonth) return;
+        setState(() {
+          if (isPending) {
+            _pendingDays.remove(utcKey);
+          } else {
+            _pendingDays.add(utcKey);
+          }
+        });
+        return;
+      }
       setState(() => _selectedDay = date);
       Navigator.of(context)
           .push(MaterialPageRoute(builder: (_) => DayView(date: date)))
           .then((_) => _loadMonth(_focusedMonth));
     }
 
+    // ── Overlay visual de asignación ───────────────────────────────────────
+    Widget assignOverlay() {
+      if (_assigningShift == null || !isInMonth) return const SizedBox.shrink();
+      return Positioned.fill(
+        child: Container(
+          margin: compact ? const EdgeInsets.all(4) : const EdgeInsets.all(6),
+          decoration: BoxDecoration(
+            color: isPending
+                ? _assigningShift!.color.withOpacity(0.22)
+                : Colors.transparent,
+            borderRadius: BorderRadius.circular(compact ? 6 : 8),
+            border: Border.all(
+              color: isPending
+                  ? _assigningShift!.color
+                  : Colors.grey.withOpacity(0.4),
+              width: isPending ? 2.0 : 1.0,
+            ),
+          ),
+          child: isPending
+              ? Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(2),
+                    child: Icon(
+                      Icons.check_circle,
+                      size: compact ? 10 : 14,
+                      color: _assigningShift!.color,
+                    ),
+                  ),
+                )
+              : null,
+        ),
+      );
+    }
+
+    // ── Modo compacto ──────────────────────────────────────────────────────
+    //
+    // La celda ahora tiene un mínimo de _kMinCompactCellH (72 px), así que
+    // hay espacio suficiente para mostrar todos los elementos sin restricción
+    // de prioridad. ClipRect evita cualquier desbordamiento visual residual.
+    //
     if (compact) {
-      // ── Modo compacto ──────────────────────────────────────────────────────
+      final ShiftModel? firstShift = shifts.isNotEmpty ? shifts.first : null;
+      final SharedShiftInfo? firstShared = sharedShifts.isNotEmpty
+          ? sharedShifts.first
+          : null;
+
       final Color? dotColor = events.isNotEmpty ? events.first.color : null;
       final int extra = events.length > 1 ? events.length - 1 : 0;
-      // Limitamos a 1 badge de turno en compacto para no desbordar
-      final compactShifts = shifts.take(1).toList();
 
       return GestureDetector(
         onTap: isInMonth ? openDay : null,
-        child: Container(
-          margin: const EdgeInsets.all(4),
-          // ClipRect garantiza que nada desborde visualmente
-          // aunque el contenido sume más que la altura disponible
-          clipBehavior: Clip.hardEdge,
-          decoration: _cellDecoration(isSelected: isSelected, isToday: isToday),
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            mainAxisSize: MainAxisSize.max,
-            children: [
-              // Número del día
-              Text(
-                '${date.day}',
-                maxLines: 1,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: isInMonth ? null : Colors.grey[400],
-                  height: 1.0,
+        child: Stack(
+          children: [
+            ClipRect(
+              child: Container(
+                margin: const EdgeInsets.all(4),
+                decoration: _cellDecoration(
+                  isSelected: isSelected,
+                  isToday: isToday,
+                ),
+                padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.max,
+                  children: [
+                    // Número del día
+                    Text(
+                      '${date.day}',
+                      maxLines: 1,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: isInMonth ? null : Colors.grey[400],
+                        height: 1.0,
+                      ),
+                    ),
+                    // Badge de turno propio
+                    if (firstShift != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: _shiftBadge(firstShift, compact: true),
+                      ),
+                    // Badge de turno compartido (si no hay propio)
+                    if (firstShift == null && firstShared != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: _sharedShiftBadge(firstShared, compact: true),
+                      ),
+                    // Punto o emoji de evento
+                    if (dotColor != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Builder(
+                          builder: (_) {
+                            final friend = _friendForEvent(events.first);
+                            if (friend != null) {
+                              return Text(
+                                friend.logo,
+                                style: const TextStyle(fontSize: 9, height: 1),
+                              );
+                            }
+                            return Container(
+                              width: 6,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: dotColor,
+                                shape: BoxShape.circle,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    // Contador "+N"
+                    if (extra > 0)
+                      Text(
+                        '+$extra',
+                        style: TextStyle(
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          color:
+                              Theme.of(context).textTheme.bodyMedium?.color ??
+                              Colors.black,
+                          height: 1.0,
+                        ),
+                      ),
+                  ],
                 ),
               ),
-              // Badge de turno propio (máx 1 en compacto)
-              if (compactShifts.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: _shiftBadge(compactShifts.first, compact: true),
-                ),
-              // Turno compartido de amigo (compacto)
-              if (sharedShifts.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: _sharedShiftBadge(sharedShifts.first, compact: true),
-                ),
-              // Punto de evento — si es compartido muestra el logo del amigo
-              if (dotColor != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Builder(
-                    builder: (_) {
-                      final firstEvent = events.first;
-                      final friend = _friendForEvent(firstEvent);
-                      if (friend != null) {
-                        return Text(
-                          friend.logo,
-                          style: const TextStyle(fontSize: 9, height: 1),
-                        );
-                      }
-                      return Container(
-                        width: 6,
-                        height: 6,
-                        decoration: BoxDecoration(
-                          color: dotColor,
-                          shape: BoxShape.circle,
-                        ),
-                      );
-                    },
-                  ),
-                )
-              else if (extra > 0)
-                Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: Text(
-                    '+${events.length}',
-                    style: TextStyle(
-                      fontSize: 8,
-                      fontWeight: FontWeight.w700,
-                      color:
-                          Theme.of(context).textTheme.bodyMedium?.color ??
-                          Colors.black,
-                      height: 1.0,
-                    ),
-                  ),
-                ),
-              // +n badge solo cuando hay punto Y extra
-              if (dotColor != null && extra > 0)
-                Text(
-                  '+$extra',
-                  style: TextStyle(
-                    fontSize: 8,
-                    fontWeight: FontWeight.w700,
-                    color:
-                        Theme.of(context).textTheme.bodyMedium?.color ??
-                        Colors.black,
-                    height: 1.0,
-                  ),
-                ),
-            ],
-          ),
+            ),
+            assignOverlay(),
+          ],
         ),
       );
     }
@@ -894,169 +1034,173 @@ class _CalendarScreenState extends State<CalendarScreen> {
       height: height,
       child: GestureDetector(
         onTap: isInMonth ? openDay : null,
-        child: Container(
-          margin: const EdgeInsets.all(6),
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-          decoration: _cellDecoration(isSelected: isSelected, isToday: isToday),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final double eventsAreaHeight = math.max(
-                0.0,
-                constraints.maxHeight - 40.0,
-              );
+        child: Stack(
+          children: [
+            Container(
+              margin: const EdgeInsets.all(6),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 6),
+              decoration: _cellDecoration(
+                isSelected: isSelected,
+                isToday: isToday,
+              ),
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  final double eventsAreaHeight = math.max(
+                    0.0,
+                    constraints.maxHeight - 40.0,
+                  );
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // ── Fila: número + turnos ──────────────────────────────────
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '${date.day}',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: isInMonth ? null : Colors.grey[400],
-                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            '${date.day}',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: isInMonth ? null : Colors.grey[400],
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: shifts.isEmpty
+                                ? const SizedBox.shrink()
+                                : SingleChildScrollView(
+                                    scrollDirection: Axis.horizontal,
+                                    child: Row(
+                                      children: shifts
+                                          .map(
+                                            (s) =>
+                                                _shiftBadge(s, compact: false),
+                                          )
+                                          .toList(),
+                                    ),
+                                  ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(width: 4),
-                      // Badges de turno propios junto al número
-                      Expanded(
-                        child: shifts.isEmpty
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        height: eventsAreaHeight,
+                        child: (events.isEmpty && sharedShifts.isEmpty)
                             ? const SizedBox.shrink()
                             : SingleChildScrollView(
-                                scrollDirection: Axis.horizontal,
-                                child: Row(
-                                  children: shifts
-                                      .map(
-                                        (s) => _shiftBadge(s, compact: false),
-                                      )
-                                      .toList(),
+                                physics: const ClampingScrollPhysics(),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    for (
+                                      var i = 0;
+                                      i <
+                                          math.min(
+                                            events.length,
+                                            maxEventsConsidered,
+                                          );
+                                      i++
+                                    )
+                                      Padding(
+                                        padding: const EdgeInsets.only(
+                                          bottom: 3,
+                                        ),
+                                        child: Builder(
+                                          builder: (ctx) {
+                                            final ev = events[i];
+                                            final friend = _friendForEvent(ev);
+                                            final isShared = friend != null;
+                                            return Container(
+                                              decoration: isShared
+                                                  ? BoxDecoration(
+                                                      border: Border.all(
+                                                        color:
+                                                            Colors.red.shade400,
+                                                        width: 1,
+                                                      ),
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            4,
+                                                          ),
+                                                    )
+                                                  : null,
+                                              padding: isShared
+                                                  ? const EdgeInsets.symmetric(
+                                                      horizontal: 3,
+                                                      vertical: 1,
+                                                    )
+                                                  : EdgeInsets.zero,
+                                              child: Row(
+                                                children: [
+                                                  Container(
+                                                    width: 8,
+                                                    height: 8,
+                                                    decoration: BoxDecoration(
+                                                      color: ev.color,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  if (isShared) ...[
+                                                    Text(
+                                                      friend!.logo,
+                                                      style: const TextStyle(
+                                                        fontSize: 10,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 2),
+                                                  ] else ...[
+                                                    Text(
+                                                      ev.icon,
+                                                      style: const TextStyle(
+                                                        fontSize: 11,
+                                                      ),
+                                                    ),
+                                                    const SizedBox(width: 4),
+                                                  ],
+                                                  Expanded(
+                                                    child: Text(
+                                                      ev.title,
+                                                      style: TextStyle(
+                                                        fontSize: 11,
+                                                        color: isInMonth
+                                                            ? null
+                                                            : Colors.grey[400],
+                                                        fontStyle: isShared
+                                                            ? FontStyle.italic
+                                                            : FontStyle.normal,
+                                                      ),
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                      maxLines: 1,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ...sharedShifts
+                                        .take(maxEventsConsidered)
+                                        .map(
+                                          (s) => Padding(
+                                            padding: const EdgeInsets.only(
+                                              bottom: 3,
+                                            ),
+                                            child: _sharedShiftBadge(s),
+                                          ),
+                                        ),
+                                  ],
                                 ),
                               ),
                       ),
                     ],
-                  ),
-                  const SizedBox(height: 4),
-                  // ── Eventos + turnos compartidos en un único área scrollable ──
-                  SizedBox(
-                    height: eventsAreaHeight,
-                    child: (events.isEmpty && sharedShifts.isEmpty)
-                        ? const SizedBox.shrink()
-                        : SingleChildScrollView(
-                            physics: const ClampingScrollPhysics(),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Eventos propios y compartidos
-                                for (
-                                  var i = 0;
-                                  i <
-                                      math.min(
-                                        events.length,
-                                        maxEventsConsidered,
-                                      );
-                                  i++
-                                )
-                                  Padding(
-                                    padding: const EdgeInsets.only(bottom: 3),
-                                    child: Builder(
-                                      builder: (ctx) {
-                                        final ev = events[i];
-                                        final friend = _friendForEvent(ev);
-                                        final isShared = friend != null;
-                                        return Container(
-                                          decoration: isShared
-                                              ? BoxDecoration(
-                                                  border: Border.all(
-                                                    color: Colors.red.shade400,
-                                                    width: 1,
-                                                  ),
-                                                  borderRadius:
-                                                      BorderRadius.circular(4),
-                                                )
-                                              : null,
-                                          padding: isShared
-                                              ? const EdgeInsets.symmetric(
-                                                  horizontal: 3,
-                                                  vertical: 1,
-                                                )
-                                              : EdgeInsets.zero,
-                                          child: Row(
-                                            children: [
-                                              Container(
-                                                width: 8,
-                                                height: 8,
-                                                decoration: BoxDecoration(
-                                                  color: ev.color,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              if (isShared) ...[
-                                                Text(
-                                                  friend!.logo,
-                                                  style: const TextStyle(
-                                                    fontSize: 10,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 2),
-                                              ] else ...[
-                                                Text(
-                                                  ev.icon,
-                                                  style: const TextStyle(
-                                                    fontSize: 11,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 4),
-                                              ],
-                                              Expanded(
-                                                child: Text(
-                                                  ev.title,
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: isInMonth
-                                                        ? null
-                                                        : Colors.grey[400],
-                                                    fontStyle: isShared
-                                                        ? FontStyle.italic
-                                                        : FontStyle.normal,
-                                                  ),
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                  maxLines: 1,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ),
-                                // Turnos compartidos de amigos (estilo 3D)
-                                ...sharedShifts.take(maxEventsConsidered).map((
-                                  s,
-                                ) {
-                                  String logo = '👤';
-                                  for (final f in _friendsWithSharedEvents) {
-                                    if (f.firebaseUid == s.ownerUid) {
-                                      logo = f.logo;
-                                      break;
-                                    }
-                                  }
-                                  return Padding(
-                                    padding: const EdgeInsets.only(bottom: 3),
-                                    child: _sharedShiftBadge(s),
-                                  );
-                                }),
-                              ],
-                            ),
-                          ),
-                  ),
-                ],
-              );
-            },
-          ),
+                  );
+                },
+              ),
+            ),
+            assignOverlay(),
+          ],
         ),
       ),
     );
@@ -1076,7 +1220,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _focusedMonth.month + 1,
       0,
     );
-    final int leadingEmpty = firstOfMonth.weekday % 7;
+    final int leadingEmpty = (firstOfMonth.weekday - 1) % 7;
     final int totalDays = leadingEmpty + lastOfMonth.day;
     final int rows = (totalDays / 7).ceil();
     final int effectiveRows = _compactMode ? 6 : rows;
@@ -1097,7 +1241,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     const int maxEventsConsidered = 6;
     const double baseCellHeight = 64.0;
     const double perEventHeight = 22.0;
-    const labels = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    const labels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
     final titleRow = Row(
       children: [
@@ -1196,9 +1340,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         spacing: 8,
                         runSpacing: 4,
                         children: [
-                          // Cada chip solo aparece si el filtro está activo.
-                          // El menú de 3 puntos controla la visibilidad.
-                          // Al pulsar el chip se desactiva y desaparece.
                           if (_filterTrabajo)
                             FilterChip(
                               label: const Text('Trabajo'),
@@ -1264,7 +1405,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         ],
                       ),
                     ),
-                    // ── Controles derecha: 3 puntos + compartir ──────────────
+                    // ── Controles derecha ────────────────────────────────────
                     Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -1279,7 +1420,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 horizontal: 8,
                                 vertical: 4,
                               ),
-                              child: Icon(
+                              child: const Icon(
                                 Icons.share_outlined,
                                 size: 20,
                                 color: Colors.black54,
@@ -1287,12 +1428,105 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             ),
                           ),
                         ),
+                        _buildAssignShiftButton(),
                         _buildFriendFilterButton(),
                       ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 8),
+
+                // ── Barra de confirmación de asignación ──────────────────────
+                if (_assigningShift != null)
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _assigningShift!.color.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _assigningShift!.color.withOpacity(0.5),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: _loadingAssignment
+                        ? const Center(
+                            child: SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          )
+                        : Row(
+                            children: [
+                              Container(
+                                width: 12,
+                                height: 12,
+                                decoration: BoxDecoration(
+                                  color: _assigningShift!.color,
+                                  borderRadius: BorderRadius.circular(3),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Asignando: ${_assigningShift!.name}  •  ${_pendingDays.length} días',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: _assigningShift!.color.withOpacity(
+                                      0.9,
+                                    ),
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _cancelShiftAssignment,
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.grey.shade600,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: const Text(
+                                  'Cancelar',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              ElevatedButton.icon(
+                                onPressed: _confirmShiftAssignment,
+                                icon: const Icon(Icons.check, size: 14),
+                                label: const Text(
+                                  'Confirmar',
+                                  style: TextStyle(fontSize: 12),
+                                ),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: _assigningShift!.color,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
 
                 // ── Calendario ───────────────────────────────────────────────
                 Expanded(
@@ -1308,10 +1542,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                 gapBetween;
                             final double totalVertMargins =
                                 cellMarginCompact * 2 * 6;
+
+                            // La celda usa el mayor entre el espacio disponible
+                            // dividido entre 6 filas y el mínimo garantizado.
+                            // Si las celdas crecen más que la pantalla, el grid
+                            // se vuelve scrollable verticalmente.
                             final double compactCellH = math.max(
                               ((availableHeight - totalVertMargins) / 6.0) -
                                   1.0,
-                              1.0,
+                              _kMinCompactCellH,
                             );
                             final double compactCellW =
                                 (constraints.maxWidth / 7.0).clamp(
@@ -1324,6 +1563,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             return Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
+                                // Cabecera de días fija
                                 SizedBox(
                                   height: labelsHeight,
                                   child: Row(
@@ -1347,26 +1587,34 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                   ),
                                 ),
                                 SizedBox(height: gapBetween),
-                                SizedBox(
-                                  height: gridH,
-                                  width: constraints.maxWidth,
-                                  child: GridView.count(
-                                    physics:
-                                        const NeverScrollableScrollPhysics(),
-                                    crossAxisCount: 7,
-                                    childAspectRatio:
-                                        compactCellW / compactCellH,
-                                    mainAxisSpacing: 0,
-                                    crossAxisSpacing: 0,
-                                    padding: EdgeInsets.zero,
-                                    shrinkWrap: true,
-                                    children: List.generate(
-                                      totalCells,
-                                      (i) => _buildCell(
-                                        cells[i],
-                                        width: compactCellW,
-                                        height: compactCellH,
-                                        compact: true,
+                                // Grid scrollable si la altura supera la pantalla
+                                Expanded(
+                                  child: SingleChildScrollView(
+                                    physics: gridH > availableHeight
+                                        ? const ClampingScrollPhysics()
+                                        : const NeverScrollableScrollPhysics(),
+                                    child: SizedBox(
+                                      height: gridH,
+                                      width: constraints.maxWidth,
+                                      child: GridView.count(
+                                        physics:
+                                            const NeverScrollableScrollPhysics(),
+                                        crossAxisCount: 7,
+                                        childAspectRatio:
+                                            compactCellW / compactCellH,
+                                        mainAxisSpacing: 0,
+                                        crossAxisSpacing: 0,
+                                        padding: EdgeInsets.zero,
+                                        shrinkWrap: true,
+                                        children: List.generate(
+                                          totalCells,
+                                          (i) => _buildCell(
+                                            cells[i],
+                                            width: compactCellW,
+                                            height: compactCellH,
+                                            compact: true,
+                                          ),
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1442,7 +1690,7 @@ class _FilterEntry {
   );
 }
 
-// ── Bottom sheet: filtro de amigos ─────────────────────────────────────────────
+// ── Bottom sheet: filtro de amigos ────────────────────────────────────────────
 
 class _FriendFilterSheet extends StatefulWidget {
   final List<FriendModel> friends;
@@ -1480,7 +1728,6 @@ class _FriendFilterSheetState extends State<_FriendFilterSheet> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Asa
           Container(
             width: 40,
             height: 4,
@@ -1500,7 +1747,6 @@ class _FriendFilterSheetState extends State<_FriendFilterSheet> {
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
                 ),
               ),
-              // Mostrar todos
               TextButton(
                 onPressed: () {
                   setState(() => _hidden.clear());
@@ -1569,6 +1815,149 @@ class _FriendFilterSheetState extends State<_FriendFilterSheet> {
             );
           }).toList(),
         ],
+      ),
+    );
+  }
+}
+
+// ── Bottom sheet: selección de turno ─────────────────────────────────────────
+
+class _ShiftPickerSheet extends StatelessWidget {
+  final List<ShiftModel> shifts;
+  final ValueChanged<ShiftModel> onSelected;
+
+  const _ShiftPickerSheet({
+    required this.shifts,
+    required this.onSelected,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    const double headerHeight = 110.0;
+    final double listHeight = shifts.length * 72.0;
+    final double bottomPadding = MediaQuery.of(context).padding.bottom + 32.0;
+    final double maxSheetHeight = MediaQuery.of(context).size.height * 0.9;
+    final double sheetHeight = (headerHeight + listHeight + bottomPadding)
+        .clamp(0, maxSheetHeight);
+
+    return SizedBox(
+      height: sheetHeight,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Row(
+                    children: [
+                      Icon(Icons.edit_calendar_outlined, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Asignar turno al mes',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Elige un turno y pulsa los días del mes para marcarlo',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade500,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+              ),
+            ),
+            Flexible(
+              child: shifts.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          'No tienes turnos creados todavía.',
+                          style: TextStyle(color: Colors.grey.shade400),
+                        ),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.fromLTRB(
+                        20,
+                        0,
+                        20,
+                        MediaQuery.of(context).padding.bottom + 32,
+                      ),
+                      itemCount: shifts.length,
+                      itemBuilder: (_, index) {
+                        final shift = shifts[index];
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Container(
+                            width: 44,
+                            height: 44,
+                            decoration: BoxDecoration(
+                              color: shift.color.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                              border: Border.all(
+                                color: shift.color.withOpacity(0.5),
+                                width: 1.5,
+                              ),
+                            ),
+                            child: Center(
+                              child: Icon(
+                                Icons.work_history,
+                                color: shift.color,
+                                size: 22,
+                              ),
+                            ),
+                          ),
+                          title: Text(
+                            shift.name,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          subtitle: Text(
+                            '${shift.from.format(context)} – ${shift.to.format(context)}',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey.shade500,
+                            ),
+                          ),
+                          trailing: Icon(
+                            Icons.chevron_right,
+                            color: shift.color,
+                          ),
+                          onTap: () => onSelected(shift),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }

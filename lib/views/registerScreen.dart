@@ -3,11 +3,11 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
-import 'package:familycalendar/core/firebaseCrudService.dart';
-import 'package:familycalendar/core/db_provider.dart';
-import 'package:familycalendar/core/firebase_sync_service.dart';
-import 'package:familycalendar/core/push_notification_service.dart';
-import 'package:familycalendar/views/menu.dart';
+import 'package:nornapp/core/firebaseCrudService.dart';
+import 'package:nornapp/core/db_provider.dart';
+import 'package:nornapp/core/firebase_sync_service.dart';
+import 'package:nornapp/core/push_notification_service.dart';
+import 'package:nornapp/views/menu.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({Key? key}) : super(key: key);

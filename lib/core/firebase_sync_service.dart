@@ -537,6 +537,32 @@ class FirebaseSyncService {
 
     _subscriptions.add(subEvents);
 
+    // Listener sobre los eventos PROPIOS para detectar cambios hechos por
+    // otros usuarios (p.ej. B marca/desmarca un checklist en un evento de A).
+    // Sin este listener, A no se entera de los cambios que B hace en tiempo real.
+    final subOwnEvents = _db
+        .collection('events')
+        .where('owner_id', isEqualTo: uid)
+        .snapshots()
+        .listen((snap) async {
+          bool changed = false;
+          for (final change in snap.docChanges) {
+            if (change.type != DocumentChangeType.modified) continue;
+            final data = change.doc.data();
+            if (data == null) continue;
+            // Solo actualizamos checklist embebido — el evento en sí ya está
+            // en SQLite y no necesita reescribirse completo.
+            await _saveEmbeddedChecklist(
+              change.doc.id,
+              data['checklist_items'],
+            );
+            changed = true;
+          }
+          if (changed) onSharedEventReceived?.call();
+        }, onError: (e) => debugPrint('❌ Error listener own events: $e'));
+
+    _subscriptions.add(subOwnEvents);
+
     final subShifts = _db
         .collection('shift_assignments')
         .where('shared_with', arrayContains: uid)

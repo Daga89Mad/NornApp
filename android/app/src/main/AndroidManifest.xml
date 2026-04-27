@@ -1,16 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- android/app/src/main/AndroidManifest.xml -->
+<!--
+  PERMISOS NECESARIOS para alarmas locales y notificaciones en NornApp.
+  Añade los bloques marcados con ★ si no los tienes ya.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ── Permisos: deben ir FUERA de <application>, bajo <manifest> ── -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-    <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- ★ PERMISOS DE NOTIFICACIONES Y ALARMAS ─────────────────────────── -->
+
+    <!-- Android 13+ (API 33+): pedir permiso en runtime para notificaciones -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
+
+    <!-- Alarmas exactas: necesario para zonedSchedule exactAllowWhileIdle -->
+    <!-- maxSdkVersion="32" porque en API 33+ se usa USE_EXACT_ALARM -->
+    <uses-permission
+        android:name="android.permission.SCHEDULE_EXACT_ALARM"
+        android:maxSdkVersion="32"/>
+
+    <!-- API 33+ reemplaza SCHEDULE_EXACT_ALARM para alarmas del sistema -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+
+    <!-- Necesario para mantener la CPU activa mientras suena la alarma -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Vibración -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <!-- Para que las alarmas sobrevivan a un reinicio del dispositivo -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+
+    <!-- fullScreenIntent: muestra pantalla completa con el móvil bloqueado -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
-    <uses-permission android:name="android.permission.CAMERA"/>
 
     <application
-        android:label="familycalendar"
+        android:label="NornApp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
@@ -22,42 +45,52 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
+            <!-- showWhenLocked + turnScreenOn: permite que la alarma encienda pantalla -->
+
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme"/>
+
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
 
-        <meta-data
-            android:name="flutterEmbedding"
-            android:value="2"/>
+        <!-- ★ RECEIVERS DE flutter_local_notifications ──────────────────── -->
 
-        <!-- ── Receptores para flutter_local_notifications ── -->
+        <!-- Recibe los intents de notificaciones programadas -->
         <receiver
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"
-            android:exported="false"/>
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver"/>
 
+        <!-- Reprograma alarmas tras reinicio del dispositivo -->
         <receiver
-            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver"
-            android:exported="false">
+            android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED"/>
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>
                 <action android:name="android.intent.action.QUICKBOOT_POWERON"/>
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>
             </intent-filter>
         </receiver>
 
+        <!-- ★ FIN RECEIVERS ──────────────────────────────────────────────── -->
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2"/>
     </application>
 
+    <!-- Para Android 12+ con queries de intents -->
     <queries>
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
     </queries>
-
 </manifest>

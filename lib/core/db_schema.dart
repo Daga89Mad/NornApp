@@ -1,6 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 13; // ← subido de 12 a 13
+  static const int version = 16; // ← subido de 15 a 16
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -12,6 +12,8 @@ class DBSchema {
   static const String tableLanguageWords = 'language_words';
   static const String tableFacts = 'interesting_facts';
   static const String tableFriends = 'friends';
+  static const String tableWeeklyMenus = 'weekly_menus';
+  static const String tableWeeklyTasks = 'weekly_tasks';
 
   static const String createUsers =
       """CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, last_sync INTEGER)""";
@@ -30,8 +32,6 @@ class DBSchema {
     )
   """;
 
-  // ↓ CORRECCIÓN: id TEXT PRIMARY KEY (antes INTEGER PRIMARY KEY AUTOINCREMENT)
-  // ChecklistRepository usa _generateId() que devuelve String → mismatch resuelto.
   static const String createChecklist = """
     CREATE TABLE checklist_items (
       id TEXT PRIMARY KEY,
@@ -79,6 +79,34 @@ class DBSchema {
       logo TEXT NOT NULL DEFAULT '😊',
       firebase_uid TEXT,
       owner_id TEXT
+    )
+  """;
+
+  static const String createWeeklyMenus = """
+    CREATE TABLE weekly_menus (
+      id TEXT PRIMARY KEY,
+      date INTEGER NOT NULL,
+      meal_type TEXT NOT NULL DEFAULT 'Comida',
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      owner_id TEXT NOT NULL DEFAULT '',
+      owner_name TEXT NOT NULL DEFAULT '',
+      shared_with TEXT NOT NULL DEFAULT '',
+      synced INTEGER NOT NULL DEFAULT 0
+    )
+  """;
+
+  static const String createWeeklyTasks = """
+    CREATE TABLE weekly_tasks (
+      id TEXT PRIMARY KEY,
+      date INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      is_done INTEGER NOT NULL DEFAULT 0,
+      owner_id TEXT NOT NULL DEFAULT '',
+      owner_name TEXT NOT NULL DEFAULT '',
+      shared_with TEXT NOT NULL DEFAULT '',
+      synced INTEGER NOT NULL DEFAULT 0
     )
   """;
 }

@@ -75,7 +75,7 @@ class _MyQrTab extends StatelessWidget {
 
     // Payload del QR — JSON mínimo que identifica al usuario en la app
     final payload = jsonEncode({
-      'app': 'familycalendar',
+      'app': 'NornApp',
       'uid': user.uid,
       'email': email,
       'name': name,
@@ -183,8 +183,8 @@ class _ScanQrTabState extends State<_ScanQrTab> {
       final data = jsonDecode(raw) as Map<String, dynamic>;
 
       // Verificar que es un QR de nuestra app
-      if (data['app'] != 'familycalendar') {
-        _showError('Este QR no pertenece a FamilyCalendar');
+      if (data['app'] != 'nornapp') {
+        _showError('Este QR no pertenece a NornApp');
         return;
       }
 

@@ -1,4 +1,4 @@
-package com.example.familycalendar
+package com.yeahsoft.nornapp
 
 import io.flutter.embedding.android.FlutterActivity
 

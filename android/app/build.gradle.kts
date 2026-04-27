@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.familycalendar"
+    namespace = "com.yeahsoft.nornapp"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.familycalendar"
+        applicationId = "com.yeahsoft.nornapp"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

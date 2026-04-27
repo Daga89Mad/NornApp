@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 13
+  static const int _dbVersion = DBSchema.version; // 16
   Database? _database;
 
   Future<Database> get database async {
@@ -42,6 +42,8 @@ class DBProvider {
     await db.execute(DBSchema.createLanguageWords);
     await db.execute(DBSchema.createFacts);
     await db.execute(DBSchema.createFriends);
+    await db.execute(DBSchema.createWeeklyMenus);
+    await db.execute(DBSchema.createWeeklyTasks);
   }
 
   FutureOr<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -104,36 +106,53 @@ class DBProvider {
             "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN logo TEXT NOT NULL DEFAULT '😊'",
           );
           await db.execute(
-            "ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN firebase_uid TEXT",
+            'ALTER TABLE ${DBSchema.tableFriends} ADD COLUMN firebase_uid TEXT',
           );
           debugPrint('Migración v11: amigos con alias/logo/uid');
           break;
         case 12:
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN shift_name TEXT NOT NULL DEFAULT ''",
-          );
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN shift_color INTEGER NOT NULL DEFAULT 4280391411",
-          );
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN shift_from_minutes INTEGER NOT NULL DEFAULT 0",
-          );
-          await db.execute(
-            "ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN shift_to_minutes INTEGER NOT NULL DEFAULT 0",
-          );
+          for (final col in [
+            "shift_name TEXT NOT NULL DEFAULT ''",
+            'shift_color INTEGER NOT NULL DEFAULT 4280391411',
+            'shift_from_minutes INTEGER NOT NULL DEFAULT 0',
+            'shift_to_minutes INTEGER NOT NULL DEFAULT 0',
+          ]) {
+            await db.execute(
+              'ALTER TABLE ${DBSchema.tableShiftAssignments} ADD COLUMN $col',
+            );
+          }
           debugPrint('Migración v12: shift_assignments enriquecido');
           break;
-
-        // ── v13: corrige checklist_items.id de INTEGER AUTOINCREMENT a TEXT ──
-        // La columna id antes era INTEGER PRIMARY KEY AUTOINCREMENT, pero
-        // ChecklistRepository genera IDs de tipo String → datatype mismatch (error 20).
-        // Solución: recrear la tabla con id TEXT PRIMARY KEY.
-        // Los ítems anteriores (si los hubiera) se pierden; los eventos no se tocan.
         case 13:
           await db.execute('DROP TABLE IF EXISTS ${DBSchema.tableChecklist}');
           await db.execute(DBSchema.createChecklist);
           debugPrint(
             'Migración v13: checklist_items.id cambiado a TEXT PRIMARY KEY',
+          );
+          break;
+        case 14:
+          await db.execute(DBSchema.createWeeklyMenus);
+          debugPrint('Migración v14: tabla weekly_menus creada');
+          break;
+        case 15:
+          await db.execute(DBSchema.createWeeklyTasks);
+          debugPrint('Migración v15: tabla weekly_tasks creada');
+          break;
+        // ── v16: columnas de compartir en weekly_menus y weekly_tasks ──────────
+        case 16:
+          for (final col in [
+            "owner_name TEXT NOT NULL DEFAULT ''",
+            "shared_with TEXT NOT NULL DEFAULT ''",
+          ]) {
+            await db.execute(
+              'ALTER TABLE ${DBSchema.tableWeeklyMenus} ADD COLUMN $col',
+            );
+            await db.execute(
+              'ALTER TABLE ${DBSchema.tableWeeklyTasks} ADD COLUMN $col',
+            );
+          }
+          debugPrint(
+            'Migración v16: shared_with y owner_name en tablas semanales',
           );
           break;
       }
@@ -198,8 +217,6 @@ class DBProvider {
     return Sqflite.firstIntValue(res) ?? 0;
   }
 
-  /// Fuerza el cierre y reapertura de la conexión.
-  /// Útil si la BD queda en estado inválido (SQLITE_READONLY_DBMOVED).
   Future<void> reset() async {
     await _database?.close();
     _database = null;

@@ -1,7 +1,7 @@
-name: familycalendar
-description: "A new Flutter project."
+name: nornapp
+description: "NornApp - tu calendario familiar inteligente."
 publish_to: 'none'
-version: 0.1.0
+version: 1.0.0
 
 environment:
   sdk: ^3.9.0
@@ -56,12 +56,13 @@ flutter_native_splash:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/logo.png"
+  image_path: "assets/images/Icono.png"
   min_sdk_android: 21
   adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/images/logo.png"
+  adaptive_icon_foreground: "assets/images/Icono.png"
 
 flutter:
   uses-material-design: true
   assets:
     - assets/images/logo.png
+    - assets/images/LogoGrande.png

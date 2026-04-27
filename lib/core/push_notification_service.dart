@@ -12,6 +12,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'alarm_service.dart';
 
 // Handler de mensajes en background/terminated.
 // DEBE ser función top-level (fuera de cualquier clase).
@@ -26,8 +27,8 @@ class PushNotificationService {
 
   final FirebaseMessaging _fcm = FirebaseMessaging.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-  final FlutterLocalNotificationsPlugin _localPlugin =
-      FlutterLocalNotificationsPlugin();
+  // Usa la instancia compartida de AlarmService para evitar conflictos de canales
+  FlutterLocalNotificationsPlugin get _localPlugin => AlarmService.plugin;
 
   static const _fcmChannelId = 'fc_push';
   static const _fcmChannelName = 'Eventos compartidos';
@@ -51,15 +52,10 @@ class PushNotificationService {
     );
     debugPrint('FCM permisos: ${settings.authorizationStatus}');
 
-    // 3. Inicializar plugin local para mostrar notificaciones en foreground
-    await _localPlugin.initialize(
-      const InitializationSettings(
-        android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        iOS: DarwinInitializationSettings(),
-      ),
-    );
+    // 3. Asegurar que AlarmService está inicializado (crea los canales Android)
+    await AlarmService.instance.init();
 
-    // 4. Crear canal Android para FCM en foreground
+    // 4. Crear canal Android adicional para mensajes FCM en foreground
     await _localPlugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin

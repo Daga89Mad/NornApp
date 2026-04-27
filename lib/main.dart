@@ -42,7 +42,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'FamilyCalendar',
+      title: 'NornApp',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.light,

@@ -5,16 +5,20 @@
 // - Palette selector button shows current palette color and opens a menu to choose palettes.
 // - Added "threeD" style: cards with depth, gradient, shadow and press animation.
 // - Defensive layout to avoid unbounded constraints and small fixes for Material 3 text theme.
+// - v2: Added Menú Semanal and Tareas Semanales after Calendario.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:familycalendar/views/calendar_screen.dart';
-import 'package:familycalendar/views/LoginBody.dart';
-import 'package:familycalendar/views/shifts_screen.dart';
-import 'package:familycalendar/views/friends_screen.dart';
-import 'package:familycalendar/views/qr_share_screen.dart';
-import 'package:familycalendar/views/diary_screen.dart';
+import 'package:nornapp/views/calendar_screen.dart';
+import 'package:nornapp/views/LoginBody.dart';
+import 'package:nornapp/views/shifts_screen.dart';
+import 'package:nornapp/views/friends_screen.dart';
+import 'package:nornapp/views/qr_share_screen.dart';
+import 'package:nornapp/views/diary_screen.dart';
+import 'package:nornapp/views/weekly_menu_screen.dart';
+import 'package:nornapp/views/weekly_tasks_screen.dart';
 import 'dart:math' as math;
+import '../core/settings_repository.dart';
 
 enum MenuStyle { legacy, modern, ultra, threeD }
 
@@ -29,7 +33,7 @@ class _MenuScreenState extends State<MenuScreen> {
   final TextEditingController _searchController = TextEditingController();
   MenuStyle _style = MenuStyle.modern;
 
-  // Palette management: user can pick a palette; the palette affects accent colors used in cards/buttons.
+  // Palette management
   final List<_Palette> _palettes = [
     const _Palette(
       name: 'Predeterminado',
@@ -83,6 +87,25 @@ class _MenuScreenState extends State<MenuScreen> {
   int _currentPaletteIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+    _searchController.addListener(() => setState(() {}));
+  }
+
+  Future<void> _loadSettings() async {
+    final styleIdx = await SettingsRepository.instance.getMenuStyleIndex();
+    final paletteIdx = await SettingsRepository.instance.getPaletteIndex();
+    if (mounted) {
+      setState(() {
+        _style =
+            MenuStyle.values[styleIdx.clamp(0, MenuStyle.values.length - 1)];
+        _currentPaletteIndex = paletteIdx.clamp(0, _palettes.length - 1);
+      });
+    }
+  }
+
+  @override
   void dispose() {
     _searchController.dispose();
     super.dispose();
@@ -100,6 +123,18 @@ class _MenuScreenState extends State<MenuScreen> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const CalendarScreen()));
+  }
+
+  void _openWeeklyMenu() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const WeeklyMenuScreen()));
+  }
+
+  void _openWeeklyTasks() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const WeeklyTasksScreen()));
   }
 
   void _openShifts() {
@@ -126,12 +161,22 @@ class _MenuScreenState extends State<MenuScreen> {
     ).push(MaterialPageRoute(builder: (_) => const DiaryScreen()));
   }
 
-  // Menu items (icons + labels). Colors will be overridden by palette mapping.
+  // Menu items — Menú semanal y Tareas semanales después de Calendario
   List<_MenuItemData> get _menuItems => [
     _MenuItemData(
       icon: Icons.calendar_today,
       label: 'Calendario',
       onTap: _openCalendar,
+    ),
+    _MenuItemData(
+      icon: Icons.restaurant_menu,
+      label: 'Menú semanal',
+      onTap: _openWeeklyMenu,
+    ),
+    _MenuItemData(
+      icon: Icons.checklist_rtl,
+      label: 'Tareas semanales',
+      onTap: _openWeeklyTasks,
     ),
     _MenuItemData(
       icon: Icons.work_history,
@@ -158,24 +203,27 @@ class _MenuScreenState extends State<MenuScreen> {
     ),
   ];
 
-  // Map to override menu item colors per palette (optional). If not present, use palette primary.
   Color _colorForLabel(String label) {
     final palette = _palettes[_currentPaletteIndex];
     switch (label) {
       case 'Calendario':
         return palette.primary;
+      case 'Menú semanal':
+        return palette.primary.withOpacity(0.92);
+      case 'Tareas semanales':
+        return palette.primary.withOpacity(0.85);
       case 'Turnos':
         return palette.primary.withOpacity(0.95);
       case 'Amigos':
-        return palette.primary.withOpacity(0.85);
+        return palette.primary.withOpacity(0.80);
       case 'Diario':
         return palette.primary.withOpacity(0.9);
       case 'Planilla de turnos':
-        return palette.primary.withOpacity(0.8);
-      case 'Compartir usuario (QR)':
-        return palette.primary.withOpacity(0.9);
-      case 'Ajustes':
         return palette.primary.withOpacity(0.75);
+      case 'Compartir usuario (QR)':
+        return palette.primary.withOpacity(0.88);
+      case 'Ajustes':
+        return palette.primary.withOpacity(0.70);
       case 'Logout':
         return Colors.redAccent;
       default:
@@ -184,15 +232,15 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   void _cycleStyle() {
-    setState(() {
-      _style = MenuStyle.values[(_style.index + 1) % MenuStyle.values.length];
-    });
+    final next = MenuStyle.values[(_style.index + 1) % MenuStyle.values.length];
+    setState(() => _style = next);
+    SettingsRepository.instance.saveMenuStyleIndex(next.index);
   }
 
   void _selectPalette(int index) {
-    setState(() {
-      _currentPaletteIndex = index.clamp(0, _palettes.length - 1);
-    });
+    final clamped = index.clamp(0, _palettes.length - 1);
+    setState(() => _currentPaletteIndex = clamped);
+    SettingsRepository.instance.savePaletteIndex(clamped);
   }
 
   @override
@@ -233,6 +281,14 @@ class _MenuScreenState extends State<MenuScreen> {
       }
     }
 
+    // Filtro de búsqueda
+    final query = _searchController.text.trim().toLowerCase();
+    final filtered = query.isEmpty
+        ? _menuItems
+        : _menuItems
+              .where((m) => m.label.toLowerCase().contains(query))
+              .toList();
+
     return Scaffold(
       backgroundColor: palette.background,
       appBar: AppBar(
@@ -268,51 +324,25 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(
             children: [
+              const SizedBox(height: 8),
               _ProfileHeader(
-                onEditProfile: () {
-                  // placeholder
-                },
+                onEditProfile: () {},
                 onQuickCalendar: _openCalendar,
                 searchController: _searchController,
                 palette: palette,
               ),
+              const SizedBox(height: 12),
+              _ModernSearchField(
+                controller: _searchController,
+                hint: 'Buscar opción…',
+                palette: palette,
+              ),
               const SizedBox(height: 16),
               Expanded(
-                child: AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 220),
-                  child: _buildBodyForStyle(
-                    _style,
-                    crossAxis,
-                    spacing,
-                    palette,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'v1.0',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: palette.text,
-                    ),
-                  ),
-                  TextButton.icon(
-                    onPressed: () {
-                      // placeholder
-                    },
-                    icon: Icon(
-                      Icons.help_outline,
-                      size: 18,
-                      color: palette.text,
-                    ),
-                    label: Text('Ayuda', style: TextStyle(color: palette.text)),
-                  ),
-                ],
+                child: _buildGrid(filtered, crossAxis, spacing, palette, theme),
               ),
             ],
           ),
@@ -321,144 +351,126 @@ class _MenuScreenState extends State<MenuScreen> {
     );
   }
 
-  Widget _buildBodyForStyle(
-    MenuStyle style,
+  Widget _buildGrid(
+    List<_MenuItemData> items,
     int crossAxis,
     double spacing,
     _Palette palette,
+    ThemeData theme,
   ) {
-    switch (style) {
-      case MenuStyle.legacy:
-        return _legacyGrid(crossAxis, spacing, palette);
-      case MenuStyle.modern:
-        return _modernGrid(crossAxis, spacing, palette);
-      case MenuStyle.ultra:
-        return _ultraList(palette);
-      case MenuStyle.threeD:
-        return _threeDGrid(crossAxis, spacing, palette);
+    if (items.isEmpty) {
+      return Center(
+        child: Text(
+          'Sin resultados',
+          style: theme.textTheme.bodyMedium?.copyWith(color: palette.text),
+        ),
+      );
     }
-  }
 
-  Widget _legacyGrid(int crossAxis, double spacing, _Palette palette) {
-    return GridView.count(
-      key: const ValueKey('legacy'),
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.zero,
-      crossAxisCount: crossAxis,
-      crossAxisSpacing: spacing,
-      mainAxisSpacing: spacing,
-      childAspectRatio: 1.1,
-      children: _menuItems.map((item) {
-        return _LegacyMenuButton(
-          icon: item.icon,
-          label: item.label,
-          onTap: item.onTap,
-          palette: palette,
-          colorOverride: _colorForLabel(item.label),
+    switch (_style) {
+      case MenuStyle.legacy:
+        return GridView.builder(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxis,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: 0.9,
+          ),
+          itemCount: items.length,
+          itemBuilder: (_, i) {
+            final item = items[i];
+            final color = _colorForLabel(item.label);
+            return _LegacyTile(
+              icon: item.icon,
+              label: item.label,
+              color: color,
+              onTap: item.onTap,
+            );
+          },
         );
-      }).toList(),
-    );
-  }
 
-  Widget _modernGrid(int crossAxis, double spacing, _Palette palette) {
-    return GridView.builder(
-      key: const ValueKey('modern'),
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.zero,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxis,
-        crossAxisSpacing: spacing,
-        mainAxisSpacing: spacing,
-        childAspectRatio: 1.05,
-      ),
-      itemCount: _menuItems.length,
-      itemBuilder: (context, index) {
-        final item = _menuItems[index];
-        return _ModernCardButLegacyButtonStyle(
-          icon: item.icon,
-          label: item.label,
-          color: _colorForLabel(item.label),
-          onTap: item.onTap,
-          palette: palette,
+      case MenuStyle.modern:
+        return GridView.builder(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxis,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: 0.88,
+          ),
+          itemCount: items.length,
+          itemBuilder: (_, i) {
+            final item = items[i];
+            final color = _colorForLabel(item.label);
+            return _ModernTile(
+              icon: item.icon,
+              label: item.label,
+              color: color,
+              onTap: item.onTap,
+            );
+          },
         );
-      },
-    );
-  }
 
-  Widget _ultraList(_Palette palette) {
-    return ListView.separated(
-      key: const ValueKey('ultra'),
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.zero,
-      itemCount: _menuItems.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final item = _menuItems[index];
-        return _UltraTile(
-          icon: item.icon,
-          label: item.label,
-          color: _colorForLabel(item.label),
-          onTap: item.onTap,
-          subtitle: _subtitleForLabel(item.label),
-          palette: palette,
+      case MenuStyle.ultra:
+        return ListView.separated(
+          itemCount: items.length,
+          separatorBuilder: (_, __) => SizedBox(height: spacing),
+          itemBuilder: (_, i) {
+            final item = items[i];
+            final color = _colorForLabel(item.label);
+            return _UltraTile(
+              icon: item.icon,
+              label: item.label,
+              color: color,
+              onTap: item.onTap,
+              palette: palette,
+            );
+          },
         );
-      },
-    );
-  }
 
-  // New 3D grid: uses _ThreeDCard for each item
-  Widget _threeDGrid(int crossAxis, double spacing, _Palette palette) {
-    return GridView.builder(
-      key: const ValueKey('threeD'),
-      physics: const BouncingScrollPhysics(),
-      padding: EdgeInsets.zero,
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxis,
-        crossAxisSpacing: spacing,
-        mainAxisSpacing: spacing,
-        childAspectRatio: 1.02,
-      ),
-      itemCount: _menuItems.length,
-      itemBuilder: (context, index) {
-        final item = _menuItems[index];
-        return _ThreeDCard(
-          icon: item.icon,
-          label: item.label,
-          color: _colorForLabel(item.label),
-          onTap: item.onTap,
-          palette: palette,
+      case MenuStyle.threeD:
+        return GridView.builder(
+          gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: crossAxis,
+            crossAxisSpacing: spacing,
+            mainAxisSpacing: spacing,
+            childAspectRatio: 0.88,
+          ),
+          itemCount: items.length,
+          itemBuilder: (_, i) {
+            final item = items[i];
+            final color = _colorForLabel(item.label);
+            return _ThreeDTile(
+              icon: item.icon,
+              label: item.label,
+              color: color,
+              onTap: item.onTap,
+            );
+          },
         );
-      },
-    );
-  }
-
-  String _subtitleForLabel(String label) {
-    switch (label) {
-      case 'Calendario':
-        return 'Ver y gestionar eventos';
-      case 'Turnos':
-        return 'Organiza y asigna turnos';
-      case 'Amigos':
-        return 'Contactos y compartir';
-      case 'Diario':
-        return 'Escribe tus pensamientos y eventos diarios';
-      case 'Diario':
-        return 'Escribe tus pensamientos del día';
-      case 'Planilla de turnos':
-        return 'Organiza turnos de forma colaborativa';
-      case 'Compartir usuario (QR)':
-        return 'Comparte tu perfil con QR';
-      case 'Ajustes':
-        return 'Preferencias de la aplicación';
-      case 'Logout':
-        return 'Cerrar sesión segura';
-      default:
-        return '';
     }
   }
 }
 
-/// Palette model
+// ════════════════════════════════════════════════════════════════════════════
+// DATA MODEL
+// ════════════════════════════════════════════════════════════════════════════
+
+class _MenuItemData {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _MenuItemData({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PALETTE
+// ════════════════════════════════════════════════════════════════════════════
+
 class _Palette {
   final String name;
   final Color primary;
@@ -473,128 +485,46 @@ class _Palette {
   });
 }
 
-/// Data model for menu items
-class _MenuItemData {
+// ════════════════════════════════════════════════════════════════════════════
+// TILES
+// ════════════════════════════════════════════════════════════════════════════
+
+class _LegacyTile extends StatelessWidget {
   final IconData icon;
   final String label;
+  final Color color;
   final VoidCallback onTap;
 
-  _MenuItemData({required this.icon, required this.label, required this.onTap});
-}
-
-/// Palette selector button (shows current color and opens menu)
-class _PaletteButton extends StatelessWidget {
-  final _Palette palette;
-  final List<_Palette> palettes;
-  final int currentIndex;
-  final ValueChanged<int> onSelected;
-
-  const _PaletteButton({
-    required this.palette,
-    required this.palettes,
-    required this.currentIndex,
-    required this.onSelected,
-    Key? key,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return PopupMenuButton<int>(
-      tooltip: 'Paleta de colores',
-      onSelected: onSelected,
-      itemBuilder: (context) {
-        return List.generate(palettes.length, (i) {
-          final p = palettes[i];
-          return PopupMenuItem<int>(
-            value: i,
-            child: Row(
-              children: [
-                Container(
-                  width: 18,
-                  height: 18,
-                  decoration: BoxDecoration(
-                    color: p.primary,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(child: Text(p.name, overflow: TextOverflow.ellipsis)),
-                if (i == currentIndex) const Icon(Icons.check, size: 18),
-              ],
-            ),
-          );
-        });
-      },
-      child: Container(
-        width: 36,
-        height: 36,
-        decoration: BoxDecoration(
-          color: palette.primary,
-          shape: BoxShape.circle,
-          boxShadow: [
-            BoxShadow(
-              color: palette.primary.withOpacity(0.18),
-              blurRadius: 6,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Legacy button style (compact square buttons)
-class _LegacyMenuButton extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  final _Palette palette;
-  final Color colorOverride;
-
-  const _LegacyMenuButton({
+  const _LegacyTile({
     required this.icon,
     required this.label,
+    required this.color,
     required this.onTap,
-    required this.palette,
-    required this.colorOverride,
     Key? key,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    final bg = palette.background;
-    final iconColor = colorOverride;
-    final textColor = palette.text;
-
     return Material(
-      color: bg,
-      borderRadius: BorderRadius.circular(10),
-      elevation: 2,
+      color: color.withOpacity(0.1),
+      borderRadius: BorderRadius.circular(14),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 8.0),
+          padding: const EdgeInsets.all(12),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: iconColor.withOpacity(0.12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, size: 32, color: iconColor),
-              ),
-              const SizedBox(height: 8),
+              Icon(icon, color: color, size: 36),
+              const SizedBox(height: 10),
               Text(
                 label,
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: textColor,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                  fontSize: 13,
                 ),
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
@@ -607,111 +537,39 @@ class _LegacyMenuButton extends StatelessWidget {
   }
 }
 
-/// Modern card that visually matches the legacy button's icon/label sizing
-class _ModernCardButLegacyButtonStyle extends StatelessWidget {
+class _ThreeDTile extends StatefulWidget {
   final IconData icon;
   final String label;
   final Color color;
   final VoidCallback onTap;
-  final _Palette palette;
 
-  const _ModernCardButLegacyButtonStyle({
+  const _ThreeDTile({
     required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
-    required this.palette,
     Key? key,
   }) : super(key: key);
 
   @override
-  Widget build(BuildContext context) {
-    final radius = 12.0;
-    final labelColor = palette.text;
-
-    return Material(
-      color: Colors.white,
-      borderRadius: BorderRadius.circular(radius),
-      elevation: 2,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(radius),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 12.0, horizontal: 8.0),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.grey.shade100),
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Container(
-                width: 44,
-                height: 44,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [color.withOpacity(0.95), color.withOpacity(0.75)],
-                  ),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: Colors.white, size: 20),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                label,
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: labelColor,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+  State<_ThreeDTile> createState() => _ThreeDTileState();
 }
 
-/// 3D card widget: tilt + depth + press animation
-class _ThreeDCard extends StatefulWidget {
-  final IconData icon;
-  final String label;
-  final Color color;
-  final VoidCallback onTap;
-  final _Palette palette;
-
-  const _ThreeDCard({
-    required this.icon,
-    required this.label,
-    required this.color,
-    required this.onTap,
-    required this.palette,
-    Key? key,
-  }) : super(key: key);
-
-  @override
-  State<_ThreeDCard> createState() => _ThreeDCardState();
-}
-
-class _ThreeDCardState extends State<_ThreeDCard>
+class _ThreeDTileState extends State<_ThreeDTile>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _ctrl;
-  late final Animation<double> _pressAnim;
+  late AnimationController _ctrl;
+  late Animation<double> _scale;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 160),
+      duration: const Duration(milliseconds: 120),
+      lowerBound: 0,
+      upperBound: 1,
     );
-    _pressAnim = Tween<double>(
-      begin: 0.0,
-      end: 0.06,
-    ).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _scale = Tween<double>(begin: 1.0, end: 0.94).animate(_ctrl);
   }
 
   @override
@@ -720,113 +578,72 @@ class _ThreeDCardState extends State<_ThreeDCard>
     super.dispose();
   }
 
-  void _onTapDown(TapDownDetails d) => _ctrl.forward();
-  void _onTapUp(TapUpDetails d) {
-    _ctrl.reverse();
-    widget.onTap();
-  }
-
-  void _onTapCancel() => _ctrl.reverse();
-
   @override
   Widget build(BuildContext context) {
-    final radius = 16.0;
-    final baseColor = widget.color;
-    final palette = widget.palette;
-
-    return AnimatedBuilder(
-      animation: _pressAnim,
-      builder: (context, child) {
-        final tilt = _pressAnim.value; // 0..0.06
-        final matrix = Matrix4.identity()
-          ..setEntry(3, 2, 0.001) // perspective
-          ..rotateX(-tilt)
-          ..rotateY(tilt / 2);
-        final elevation = 18.0 * (1 - tilt);
-        return Transform(
-          transform: matrix,
-          alignment: Alignment.center,
-          child: Material(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(radius),
-            elevation: elevation,
-            shadowColor: baseColor.withOpacity(0.28),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(radius),
-              onTapDown: _onTapDown,
-              onTapUp: _onTapUp,
-              onTapCancel: _onTapCancel,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 14.0,
-                  horizontal: 12.0,
-                ),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(radius),
-                  gradient: LinearGradient(
-                    begin: Alignment(-0.8, -0.6),
-                    end: Alignment(0.8, 0.6),
-                    colors: [
-                      baseColor.withOpacity(0.98),
-                      baseColor.withOpacity(0.78),
-                    ],
-                  ),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Icon circle with subtle inner shadow effect (simulated)
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.12),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.12),
-                            blurRadius: 6,
-                            offset: const Offset(0, 4),
-                          ),
-                          BoxShadow(
-                            color: Colors.white.withOpacity(0.06),
-                            blurRadius: 2,
-                            offset: const Offset(-2, -2),
-                          ),
-                        ],
-                      ),
-                      child: Icon(widget.icon, color: Colors.white, size: 30),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      widget.label,
-                      textAlign: TextAlign.center,
-                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: palette.text,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
+    return GestureDetector(
+      onTapDown: (_) => _ctrl.forward(),
+      onTapUp: (_) {
+        _ctrl.reverse();
+        widget.onTap();
+      },
+      onTapCancel: () => _ctrl.reverse(),
+      child: AnimatedBuilder(
+        animation: _scale,
+        builder: (_, child) =>
+            Transform.scale(scale: _scale.value, child: child),
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                widget.color.withOpacity(0.95),
+                widget.color.withOpacity(0.65),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: widget.color.withOpacity(0.38),
+                blurRadius: 10,
+                offset: const Offset(0, 6),
               ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(widget.icon, color: Colors.white, size: 36),
+                const SizedBox(height: 10),
+                Text(
+                  widget.label,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                    fontSize: 13,
+                  ),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
 
-/// Rosado-specific card (kept for palette variants; uses palette colors)
-class _RosadoCard extends StatelessWidget {
+class _ModernTile extends StatelessWidget {
   final IconData icon;
   final String label;
   final Color color;
   final VoidCallback onTap;
 
-  const _RosadoCard({
+  const _ModernTile({
     required this.icon,
     required this.label,
     required this.color,
@@ -836,7 +653,7 @@ class _RosadoCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = 14.0;
+    const radius = 16.0;
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(radius),
@@ -973,7 +790,73 @@ class _UltraTile extends StatelessWidget {
   }
 }
 
-/// Profile header with constrained actions to avoid layout issues
+// ════════════════════════════════════════════════════════════════════════════
+// PALETTE BUTTON
+// ════════════════════════════════════════════════════════════════════════════
+
+class _PaletteButton extends StatelessWidget {
+  final _Palette palette;
+  final List<_Palette> palettes;
+  final int currentIndex;
+  final void Function(int) onSelected;
+
+  const _PaletteButton({
+    required this.palette,
+    required this.palettes,
+    required this.currentIndex,
+    required this.onSelected,
+    Key? key,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<int>(
+      tooltip: 'Cambiar paleta',
+      onSelected: onSelected,
+      itemBuilder: (_) => List.generate(
+        palettes.length,
+        (i) => PopupMenuItem<int>(
+          value: i,
+          child: Row(
+            children: [
+              Container(
+                width: 18,
+                height: 18,
+                decoration: BoxDecoration(
+                  color: palettes[i].primary,
+                  shape: BoxShape.circle,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                palettes[i].name,
+                style: TextStyle(
+                  fontWeight: i == currentIndex
+                      ? FontWeight.bold
+                      : FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      child: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: palette.primary,
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.grey.shade300, width: 1.5),
+        ),
+      ),
+    );
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PROFILE HEADER
+// ════════════════════════════════════════════════════════════════════════════
+
 class _ProfileHeader extends StatelessWidget {
   final VoidCallback onEditProfile;
   final VoidCallback onQuickCalendar;
@@ -993,7 +876,6 @@ class _ProfileHeader extends StatelessWidget {
     final user = FirebaseAuth.instance.currentUser;
     final displayName = user?.displayName ?? 'Usuario';
     final email = user?.email ?? '';
-
     final textColor = palette.text;
 
     return Row(
@@ -1051,7 +933,10 @@ class _ProfileHeader extends StatelessWidget {
   }
 }
 
-/// Simple search field used in the header area
+// ════════════════════════════════════════════════════════════════════════════
+// SEARCH FIELD
+// ════════════════════════════════════════════════════════════════════════════
+
 class _ModernSearchField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;

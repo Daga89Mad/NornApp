@@ -105,10 +105,15 @@ class EventRepository {
       day.month,
       day.day,
     ).millisecondsSinceEpoch;
+    final myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
+    // Mostrar: mis propios eventos (incluido solo_para_mi)
+    //          + eventos de otros solo si NO son solo_para_mi
+    //          + eventos sin owner (datos legacy)
     final rows = await DBProvider.db.query(
       DBSchema.tableEvents,
-      where: 'date = ?',
-      whereArgs: [dayMs],
+      where:
+          "date = ? AND (solo_para_mi = 0 OR owner_id = ? OR owner_id IS NULL OR owner_id = '')",
+      whereArgs: [dayMs, myUid],
       orderBy: 'from_minutes ASC',
     );
     return rows.map(_fromMap).toList();
