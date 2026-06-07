@@ -18,7 +18,6 @@ import 'fun_day_sheet.dart';
 class DayView extends StatefulWidget {
   final DateTime date;
   const DayView({Key? key, required this.date}) : super(key: key);
-
   @override
   State<DayView> createState() => _DayViewState();
 }
@@ -31,6 +30,7 @@ class _DayViewState extends State<DayView> {
   List<FriendModel> _cachedFriends = [];
   bool _isLoading = true;
   String _myUid = '';
+  final ScrollController _timelineController = ScrollController();
 
   static const double hourHeight = 80.0;
   static const double leftColumnWidth = 70.0;
@@ -40,6 +40,12 @@ class _DayViewState extends State<DayView> {
     super.initState();
     _myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _loadAll();
+  }
+
+  @override
+  void dispose() {
+    _timelineController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAll() async {
@@ -98,9 +104,30 @@ class _DayViewState extends State<DayView> {
     } catch (e) {
       debugPrint('❌ Error cargando día: $e');
     } finally {
-      // Garantizado: siempre se quita el spinner
       if (mounted) setState(() => _isLoading = false);
+      _scrollToFirstEvent(); // ← desplaza al primer evento del día
     }
+  }
+
+  void _scrollToFirstEvent() {
+    // Reúne las horas de inicio de eventos y turnos compartidos.
+    final tops = <double>[
+      ..._events.map((e) => _timeOfDayToTop(e.from)),
+      ..._sharedShifts.map((s) => _timeOfDayToTop(s.from)),
+    ];
+    if (tops.isEmpty) return; // Sin eventos → se queda como está (00:00)
+
+    final firstTop = tops.reduce((a, b) => a < b ? a : b);
+    final target = (firstTop - 12.0).clamp(0.0, 24 * hourHeight);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_timelineController.hasClients) return;
+      _timelineController.animateTo(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   // ── Fun day sheet ──────────────────────────────────────────────────────────
@@ -705,6 +732,7 @@ class _DayViewState extends State<DayView> {
                   // ── Línea de tiempo ────────────────────────────────────────
                   Expanded(
                     child: SingleChildScrollView(
+                      controller: _timelineController,
                       child: SizedBox(
                         height: totalHeight,
                         child: Stack(

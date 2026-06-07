@@ -155,6 +155,13 @@ class DBProvider {
             'Migración v16: shared_with y owner_name en tablas semanales',
           );
           break;
+        case 17:
+          await db.execute(
+            "ALTER TABLE ${DBSchema.tableWeeklyTasks} "
+            "ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
+          );
+          debugPrint('Migración v17: recurrence en weekly_tasks');
+          break;
       }
     }
   }

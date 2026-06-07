@@ -50,6 +50,22 @@ class WeeklyTaskRepository {
   }
 
   Future<void> save(WeeklyTask task) async {
+    final bool isMine = task.ownerId.isEmpty || task.ownerId == _uid;
+
+    // ── Tarea compartida POR OTRA persona ────────────────────────────────────
+    // No reclamamos la propiedad. Solo persistimos el cambio (p. ej. is_done)
+    // y actualizamos ÚNICAMENTE ese campo en el doc original del dueño.
+    if (!isMine) {
+      final toSave = task.copyWith(synced: 0);
+      await DBProvider.db.insertOrReplace(
+        DBSchema.tableWeeklyTasks,
+        toSave.toMap(),
+      );
+      await _pushDoneFlagOnly(task);
+      return;
+    }
+
+    // ── Tarea PROPIA ──────────────────────────────────────────────────────────
     final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
       'tasks',
     );
@@ -60,16 +76,59 @@ class WeeklyTaskRepository {
     final toSave = task.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
-      sharedWith: task.ownerId == _uid || task.ownerId.isEmpty
-          ? sharedJson
-          : task.sharedWith,
+      sharedWith: sharedJson,
       synced: 0,
     );
     await DBProvider.db.insertOrReplace(
       DBSchema.tableWeeklyTasks,
       toSave.toMap(),
     );
-    _pushToFirebase(toSave, sharedUids);
+    await _pushToFirebase(toSave, sharedUids);
+  }
+
+  /// Para tareas ajenas: actualiza solo el estado de hecho/no hecho sin tocar
+  /// owner_id ni shared_with, así el dueño no pierde la tarea ni el reparto.
+  Future<void> _pushDoneFlagOnly(WeeklyTask task) async {
+    if (_uid.isEmpty) return;
+    try {
+      await _firestore.collection(_collection).doc(task.id).set({
+        'is_done': task.isDone,
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+      await DBProvider.db.insertOrReplace(
+        DBSchema.tableWeeklyTasks,
+        task.copyWith(synced: 1).toMap(),
+      );
+    } catch (e) {
+      debugPrint('❌ Error push is_done (tarea compartida): $e');
+    }
+  }
+
+  /// Reaplica el reparto actual a TODAS mis tareas locales y las reempuja.
+  /// Llamar al cerrar el diálogo de compartir y al abrir la pantalla, para que
+  /// el otro usuario siempre vea las tareas sin tener que volver a compartir.
+  Future<void> reapplyShares() async {
+    if (_uid.isEmpty) return;
+    final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
+      'tasks',
+    );
+    final sharedJson = sharedUids.isEmpty
+        ? ''
+        : '[${sharedUids.map((u) => '"$u"').join(',')}]';
+
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'owner_id = ?',
+      whereArgs: [_uid],
+    );
+    for (final row in rows) {
+      final t = WeeklyTask.fromMap(
+        row,
+      ).copyWith(sharedWith: sharedJson, synced: 0);
+      await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyTasks, t.toMap());
+      await _pushToFirebase(t, sharedUids);
+    }
+    debugPrint('🔁 Reaplicado reparto a ${rows.length} tareas');
   }
 
   Future<void> toggleDone(WeeklyTask task) async {
@@ -186,9 +245,7 @@ class WeeklyTaskRepository {
         'owner_name': _displayName,
         'updated_at': FieldValue.serverTimestamp(),
       };
-      if (sharedUids.isNotEmpty) {
-        payload['shared_with'] = sharedUids;
-      }
+      payload['shared_with'] = sharedUids;
       await _firestore
           .collection(_collection)
           .doc(task.id)
@@ -227,5 +284,43 @@ class WeeklyTaskRepository {
     final list = raw as List<dynamic>;
     if (list.isEmpty) return '';
     return '[${list.map((e) => '"$e"').join(',')}]';
+  }
+
+  /// Crea la tarea y, si es recurrente, genera instancias futuras.
+  /// 'weekly' → 12 semanas; 'daily' → 30 días.
+  Future<void> saveWithRecurrence(WeeklyTask task) async {
+    await save(task);
+    if (task.recurrence == 'none') return;
+
+    final base = DateTime.fromMillisecondsSinceEpoch(task.date);
+    final int count = task.recurrence == 'weekly' ? 11 : 29;
+    final Duration step = task.recurrence == 'weekly'
+        ? const Duration(days: 7)
+        : const Duration(days: 1);
+
+    for (var i = 1; i <= count; i++) {
+      final d = base.add(step * i);
+      final instance = task.copyWith(
+        id: generateId(),
+        date: DateTime(d.year, d.month, d.day).millisecondsSinceEpoch,
+        isDone: false,
+        synced: 0,
+      );
+      await save(instance);
+    }
+  }
+
+  /// Mueve una tarea a otro día (cambia su fecha).
+  Future<void> moveToDay(WeeklyTask task, DateTime newDay) async {
+    await save(
+      task.copyWith(
+        date: DateTime(
+          newDay.year,
+          newDay.month,
+          newDay.day,
+        ).millisecondsSinceEpoch,
+        synced: 0,
+      ),
+    );
   }
 }

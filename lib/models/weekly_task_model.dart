@@ -10,6 +10,7 @@ class WeeklyTask {
   final String ownerName; // nombre del dueño para mostrar en items compartidos
   final String sharedWith; // JSON-encoded list de UIDs
   final int synced;
+  final String recurrence; // 'none' | 'daily' | 'weekly'
 
   const WeeklyTask({
     required this.id,
@@ -21,6 +22,7 @@ class WeeklyTask {
     this.ownerName = '',
     this.sharedWith = '',
     this.synced = 0,
+    this.recurrence = 'none',
   });
 
   factory WeeklyTask.fromMap(Map<String, dynamic> m) => WeeklyTask(
@@ -33,6 +35,7 @@ class WeeklyTask {
     ownerName: (m['owner_name'] as String?) ?? '',
     sharedWith: (m['shared_with'] as String?) ?? '',
     synced: (m['synced'] as int?) ?? 0,
+    recurrence: (m['recurrence'] as String?) ?? 'none',
   );
 
   Map<String, dynamic> toMap() => {
@@ -45,6 +48,7 @@ class WeeklyTask {
     'owner_name': ownerName,
     'shared_with': sharedWith,
     'synced': synced,
+    'recurrence': recurrence,
   };
 
   WeeklyTask copyWith({
@@ -57,6 +61,7 @@ class WeeklyTask {
     String? ownerName,
     String? sharedWith,
     int? synced,
+    String? recurrence,
   }) => WeeklyTask(
     id: id ?? this.id,
     date: date ?? this.date,
@@ -67,6 +72,7 @@ class WeeklyTask {
     ownerName: ownerName ?? this.ownerName,
     sharedWith: sharedWith ?? this.sharedWith,
     synced: synced ?? this.synced,
+    recurrence: recurrence ?? this.recurrence,
   );
 
   bool isSharedFromOther(String myUid) =>

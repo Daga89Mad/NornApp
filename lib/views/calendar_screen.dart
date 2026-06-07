@@ -1,5 +1,3 @@
-// lib/views/calendar_screen.dart
-
 import 'package:flutter/material.dart';
 import '../models/event_item.dart';
 import '../models/shift_model.dart';
@@ -1332,107 +1330,35 @@ class _CalendarScreenState extends State<CalendarScreen> {
             child: Column(
               children: [
                 // ── Filtros ──────────────────────────────────────────────────
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        spacing: 8,
-                        runSpacing: 4,
-                        children: [
-                          if (_filterTrabajo)
-                            FilterChip(
-                              label: const Text('Trabajo'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterTrabajo = v);
-                                _saveSettings();
-                              },
+                // ── Controles (sin chips: filtros en el menú de puntitos) ────
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _buildFilterSummaryMenu(), // los “puntitos” para filtrar
+                      Tooltip(
+                        message: 'Compartir',
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(16),
+                          onTap: _openShareDialog,
+                          child: const Padding(
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
                             ),
-                          if (_filterEventos)
-                            FilterChip(
-                              label: const Text('Eventos'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterEventos = v);
-                                _saveSettings();
-                              },
-                            ),
-                          if (_filterCitas)
-                            FilterChip(
-                              label: const Text('Citas'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterCitas = v);
-                                _saveSettings();
-                              },
-                            ),
-                          if (_filterRecordatorios)
-                            FilterChip(
-                              label: const Text('Recordatorios'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterRecordatorios = v);
-                                _saveSettings();
-                              },
-                            ),
-                          if (_filterBebe)
-                            FilterChip(
-                              label: const Text('Bebé'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterBebe = v);
-                                _saveSettings();
-                              },
-                            ),
-                          if (_filterPeriodo)
-                            FilterChip(
-                              label: const Text('Período'),
-                              selected: true,
-                              onSelected: (v) {
-                                setState(() => _filterPeriodo = v);
-                                _saveSettings();
-                              },
-                            ),
-                          if (_filterTurnos)
-                            FilterChip(
-                              avatar: const Icon(Icons.work_outline, size: 14),
-                              label: const Text('Turnos'),
-                              selected: true,
-                              onSelected: (v) =>
-                                  setState(() => _filterTurnos = v),
-                            ),
-                        ],
-                      ),
-                    ),
-                    // ── Controles derecha ────────────────────────────────────
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _buildFilterSummaryMenu(),
-                        Tooltip(
-                          message: 'Compartir',
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(16),
-                            onTap: _openShareDialog,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              child: const Icon(
-                                Icons.share_outlined,
-                                size: 20,
-                                color: Colors.black54,
-                              ),
+                            child: Icon(
+                              Icons.share_outlined,
+                              size: 20,
+                              color: Colors.black54,
                             ),
                           ),
                         ),
-                        _buildAssignShiftButton(),
-                        _buildFriendFilterButton(),
-                      ],
-                    ),
-                  ],
+                      ),
+                      _buildAssignShiftButton(),
+                      _buildFriendFilterButton(),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 8),
 
@@ -1530,118 +1456,63 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
                 // ── Calendario ───────────────────────────────────────────────
                 Expanded(
-                  child: _compactMode
-                      ? LayoutBuilder(
-                          builder: (context, constraints) {
-                            const double labelsHeight = 32.0;
-                            const double gapBetween = 6.0;
-                            const double cellMarginCompact = 4.0;
-                            final double availableHeight =
-                                constraints.maxHeight -
-                                labelsHeight -
-                                gapBetween;
-                            final double totalVertMargins =
-                                cellMarginCompact * 2 * 6;
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onHorizontalDragEnd: (details) {
+                      final v = details.primaryVelocity ?? 0;
+                      if (v.abs() < 250) return; // ignora arrastres pequeños
+                      if (v > 0) {
+                        _prevMonthAction(); // desliza a la derecha → mes anterior
+                      } else {
+                        _nextMonthAction(); // desliza a la izquierda → mes siguiente
+                      }
+                    },
+                    child: _compactMode
+                        ? LayoutBuilder(
+                            builder: (context, constraints) {
+                              const double labelsHeight = 32.0;
+                              const double gapBetween = 6.0;
+                              const double cellMarginCompact = 4.0;
+                              final double availableHeight =
+                                  constraints.maxHeight -
+                                  labelsHeight -
+                                  gapBetween;
+                              final double totalVertMargins =
+                                  cellMarginCompact * 2 * 6;
 
-                            // La celda usa el mayor entre el espacio disponible
-                            // dividido entre 6 filas y el mínimo garantizado.
-                            // Si las celdas crecen más que la pantalla, el grid
-                            // se vuelve scrollable verticalmente.
-                            final double compactCellH = math.max(
-                              ((availableHeight - totalVertMargins) / 6.0) -
-                                  1.0,
-                              _kMinCompactCellH,
-                            );
-                            final double compactCellW =
-                                (constraints.maxWidth / 7.0).clamp(
-                                  1.0,
-                                  double.infinity,
-                                );
-                            final double gridH =
-                                (compactCellH * 6) + totalVertMargins;
+                              // La celda usa el mayor entre el espacio disponible
+                              // dividido entre 6 filas y el mínimo garantizado.
+                              // Si las celdas crecen más que la pantalla, el grid
+                              // se vuelve scrollable verticalmente.
+                              final double compactCellH = math.max(
+                                ((availableHeight - totalVertMargins) / 6.0) -
+                                    1.0,
+                                _kMinCompactCellH,
+                              );
+                              final double compactCellW =
+                                  (constraints.maxWidth / 7.0).clamp(
+                                    1.0,
+                                    double.infinity,
+                                  );
+                              final double gridH =
+                                  (compactCellH * 6) + totalVertMargins;
 
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                // Cabecera de días fija
-                                SizedBox(
-                                  height: labelsHeight,
-                                  child: Row(
-                                    children: List.generate(
-                                      7,
-                                      (i) => SizedBox(
-                                        width: compactCellW,
-                                        child: Center(
-                                          child: Text(
-                                            labels[i],
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.black87,
-                                            ),
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                SizedBox(height: gapBetween),
-                                // Grid scrollable si la altura supera la pantalla
-                                Expanded(
-                                  child: SingleChildScrollView(
-                                    physics: gridH > availableHeight
-                                        ? const ClampingScrollPhysics()
-                                        : const NeverScrollableScrollPhysics(),
-                                    child: SizedBox(
-                                      height: gridH,
-                                      width: constraints.maxWidth,
-                                      child: GridView.count(
-                                        physics:
-                                            const NeverScrollableScrollPhysics(),
-                                        crossAxisCount: 7,
-                                        childAspectRatio:
-                                            compactCellW / compactCellH,
-                                        mainAxisSpacing: 0,
-                                        crossAxisSpacing: 0,
-                                        padding: EdgeInsets.zero,
-                                        shrinkWrap: true,
-                                        children: List.generate(
-                                          totalCells,
-                                          (i) => _buildCell(
-                                            cells[i],
-                                            width: compactCellW,
-                                            height: compactCellH,
-                                            compact: true,
-                                          ),
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            );
-                          },
-                        )
-                      : SingleChildScrollView(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            controller: _horizontalController,
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(minWidth: totalWidth),
-                              child: Column(
+                              return Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  // Cabecera de días fija
                                   SizedBox(
-                                    height: 32,
+                                    height: labelsHeight,
                                     child: Row(
                                       children: List.generate(
                                         7,
                                         (i) => SizedBox(
-                                          width: realCellWidth,
+                                          width: compactCellW,
                                           child: Center(
                                             child: Text(
                                               labels[i],
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.bold,
                                                 color: Colors.black87,
@@ -1652,16 +1523,85 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                       ),
                                     ),
                                   ),
-                                  const SizedBox(height: 8),
-                                  buildCalendarTable(
-                                    realCellWidth,
-                                    baseCellHeight,
+                                  SizedBox(height: gapBetween),
+                                  // Grid scrollable si la altura supera la pantalla
+                                  Expanded(
+                                    child: SingleChildScrollView(
+                                      physics: gridH > availableHeight
+                                          ? const ClampingScrollPhysics()
+                                          : const NeverScrollableScrollPhysics(),
+                                      child: SizedBox(
+                                        height: gridH,
+                                        width: constraints.maxWidth,
+                                        child: GridView.count(
+                                          physics:
+                                              const NeverScrollableScrollPhysics(),
+                                          crossAxisCount: 7,
+                                          childAspectRatio:
+                                              compactCellW / compactCellH,
+                                          mainAxisSpacing: 0,
+                                          crossAxisSpacing: 0,
+                                          padding: EdgeInsets.zero,
+                                          shrinkWrap: true,
+                                          children: List.generate(
+                                            totalCells,
+                                            (i) => _buildCell(
+                                              cells[i],
+                                              width: compactCellW,
+                                              height: compactCellH,
+                                              compact: true,
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
                                 ],
+                              );
+                            },
+                          )
+                        : SingleChildScrollView(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              controller: _horizontalController,
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minWidth: totalWidth,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    SizedBox(
+                                      height: 32,
+                                      child: Row(
+                                        children: List.generate(
+                                          7,
+                                          (i) => SizedBox(
+                                            width: realCellWidth,
+                                            child: Center(
+                                              child: Text(
+                                                labels[i],
+                                                style: const TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  color: Colors.black87,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    buildCalendarTable(
+                                      realCellWidth,
+                                      baseCellHeight,
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),
-                        ),
+                  ),
                 ),
               ],
             ),

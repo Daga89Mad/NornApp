@@ -1,15 +1,3 @@
-// lib/core/firebase_sync_service.dart
-//
-// ARQUITECTURA DEL CHECKLIST (v2 - definitiva):
-//  Los items se guardan DENTRO del documento del evento en Firestore
-//  como campo Map: "checklist_items": { itemId: {text, is_checked, position} }
-//
-//  Ventajas vs colección separada:
-//   ✅ Sin race condition (items viajan con el evento)
-//   ✅ Sin índice extra en Firestore
-//   ✅ El listener ya trae los items, sin consulta adicional
-//   ✅ Toggle actualiza events/{id}.checklist_items.{itemId}.is_checked
-
 import 'dart:async';
 import 'package:flutter/foundation.dart' show VoidCallback, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -21,6 +9,7 @@ import '../models/friend_model.dart';
 import '../models/friend_request_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
+import 'alarm_service.dart';
 
 class FirebaseSyncService {
   FirebaseSyncService._();
@@ -488,6 +477,11 @@ class FirebaseSyncService {
             switch (change.type) {
               case DocumentChangeType.added:
               case DocumentChangeType.modified:
+                // Conservamos los campos del recordatorio (has_notification,
+                // notification_at, has_alarm, alarm_at). El push del
+                // recordatorio compartido lo envía el Cloud Function
+                // reminderDispatcher, NO una notificación local, para evitar
+                // notificaciones duplicadas.
                 await DBProvider.db.insertOrReplace(DBSchema.tableEvents, {
                   'id': change.doc.id,
                   'title': data['title'] ?? '',
@@ -503,21 +497,27 @@ class FirebaseSyncService {
                   'color': data['color'] ?? 4280391411,
                   'owner_id': data['owner_id'] ?? '',
                   'synced': 1,
-                  'has_alarm': 0,
-                  'alarm_at': null,
-                  'has_notification': 0,
-                  'notification_at': null,
-                  'solo_para_mi': 0,
+                  'has_alarm': (data['has_alarm'] ?? false) ? 1 : 0,
+                  'alarm_at': _msFromTs(data['alarm_at']),
+                  'has_notification': (data['has_notification'] ?? false)
+                      ? 1
+                      : 0,
+                  'notification_at': _msFromTs(data['notification_at']),
+                  'solo_para_mi': (data['solo_para_mi'] ?? false) ? 1 : 0,
                 });
-                // Checklist embebido → se guarda directamente del snapshot
+
                 await _saveEmbeddedChecklist(
                   change.doc.id,
                   data['checklist_items'],
                 );
+
                 changed = true;
                 break;
 
               case DocumentChangeType.removed:
+                // Cancela cualquier alarma local que pudiera haber quedado de
+                // versiones anteriores (inofensivo si no existe ninguna).
+                await AlarmService.instance.cancelAll(change.doc.id);
                 await DBProvider.db.delete(
                   DBSchema.tableEvents,
                   where: 'id = ?',

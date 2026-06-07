@@ -106,6 +106,7 @@ class DBSchema {
       owner_id TEXT NOT NULL DEFAULT '',
       owner_name TEXT NOT NULL DEFAULT '',
       shared_with TEXT NOT NULL DEFAULT '',
+      recurrence TEXT NOT NULL DEFAULT 'none',  -- ← nueva
       synced INTEGER NOT NULL DEFAULT 0
     )
   """;

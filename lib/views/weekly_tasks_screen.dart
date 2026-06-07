@@ -34,6 +34,14 @@ const _meses = [
 ];
 const _diasCortos = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+String _shortOwnerLabel(String ownerName) {
+  if (ownerName.isEmpty) return 'Compartido';
+  final base = ownerName.contains('@') ? ownerName.split('@').first : ownerName;
+  final firstChunk = base.split(RegExp(r'[._\s]')).first;
+  if (firstChunk.isEmpty) return 'Compartido';
+  return firstChunk[0].toUpperCase() + firstChunk.substring(1);
+}
+
 String _fmtShort(DateTime d) => '${d.day} ${_meses[d.month]}';
 String _fmtMedium(DateTime d) => '${_diasCortos[d.weekday - 1]} ${d.day}';
 String _fmtWeekRange(DateTime monday) {
@@ -97,6 +105,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       context: context,
       builder: (_) => const ShareWeeklyDialog(initialType: 'tasks'),
     );
+    await _repo.reapplyShares(); // ← reaplica el reparto a todas las tareas
     _loadWeek();
   }
 
@@ -148,7 +157,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   // ══════════════════════════════════════════════════════════════════════════
   // DIALOGS
   // ══════════════════════════════════════════════════════════════════════════
-
+  String recurrence = 'none';
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     final titleCtrl = TextEditingController();
@@ -211,6 +220,31 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                   maxLines: 2,
                   textCapitalization: TextCapitalization.sentences,
                 ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Repetir',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  children:
+                      [
+                        ('none', 'No repetir'),
+                        ('daily', 'Cada día'),
+                        ('weekly', 'Cada semana'),
+                      ].map((opt) {
+                        return ChoiceChip(
+                          label: Text(
+                            opt.$2,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          selected: recurrence == opt.$1,
+                          selectedColor: _accent.withOpacity(0.3),
+                          onSelected: (_) => setS(() => recurrence = opt.$1),
+                        );
+                      }).toList(),
+                ),
               ],
             ),
           ),
@@ -234,8 +268,9 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                   title: title,
                   description: descCtrl.text.trim(),
                   ownerId: '',
+                  recurrence: recurrence,
                 );
-                await _repo.save(task);
+                await _repo.saveWithRecurrence(task);
                 if (ctx.mounted) Navigator.pop(ctx);
                 _loadWeek();
               },
@@ -494,6 +529,22 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               'Eliminar',
               style: TextStyle(color: Colors.redAccent),
             ),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.event_repeat, size: 18),
+            label: const Text('Mover a…'),
+            onPressed: () async {
+              final picked = await showDatePicker(
+                context: ctx,
+                initialDate: DateTime.fromMillisecondsSinceEpoch(task.date),
+                firstDate: DateTime(2020),
+                lastDate: DateTime(2100),
+              );
+              if (picked == null) return;
+              await _repo.moveToDay(task, picked);
+              if (ctx.mounted) Navigator.pop(ctx);
+              _loadWeek();
+            },
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -976,30 +1027,6 @@ class _TaskDayCard extends StatelessWidget {
                   ),
                   title: Row(
                     children: [
-                      if (t.isSharedFromOther(myUid)) ...[
-                        Container(
-                          margin: const EdgeInsets.only(right: 6),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.teal.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: Colors.teal.withOpacity(0.4),
-                            ),
-                          ),
-                          child: Text(
-                            t.ownerName.isNotEmpty ? t.ownerName : 'Compartido',
-                            style: const TextStyle(
-                              fontSize: 9,
-                              color: Colors.teal,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
                       Expanded(
                         child: Text(
                           t.title,
@@ -1011,9 +1038,52 @@ class _TaskDayCard extends StatelessWidget {
                                 : null,
                             color: t.isDone ? Colors.grey : null,
                           ),
+                          maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      if (t.isSharedFromOther(myUid)) ...[
+                        const SizedBox(width: 6),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 90),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.teal.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: Colors.teal.withOpacity(0.4),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(
+                                  Icons.people_alt_outlined,
+                                  size: 10,
+                                  color: Colors.teal,
+                                ),
+                                const SizedBox(width: 3),
+                                Flexible(
+                                  child: Text(
+                                    _shortOwnerLabel(t.ownerName),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.teal,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   subtitle: t.description.isNotEmpty
