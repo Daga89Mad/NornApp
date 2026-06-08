@@ -14,6 +14,8 @@ import '../core/friend_repository.dart';
 import 'checklist_detail_page.dart';
 import '../core/fun_content_repository.dart';
 import 'fun_day_sheet.dart';
+import '../models/calendar_category.dart';
+import '../core/category_repository.dart';
 
 class DayView extends StatefulWidget {
   final DateTime date;
@@ -205,8 +207,13 @@ class _DayViewState extends State<DayView> {
     Map<String, dynamic> result, {
     required EventItem? existingEvent,
   }) async {
-    final categoryStr = result['category'] as String? ?? 'Eventos';
-    final category = EventRepository.categoryFromString(categoryStr);
+    final catKey = result['categoryKey'] as String? ?? 'Evento';
+    final catColorVal = result['categoryColor'] as int?;
+    final catIcon = result['categoryIcon'] as String?;
+    final enumFallback = Category.values.firstWhere(
+      (c) => c.name == catKey,
+      orElse: () => Category.Evento,
+    );
     final tipo = (result['tipo'] as Tipo?) ?? Tipo.Otros;
     final currentUser = FirebaseAuth.instance.currentUser;
     final creator =
@@ -217,23 +224,26 @@ class _DayViewState extends State<DayView> {
 
     final newEvent = EventItem(
       id: existingEvent?.id,
-      category: category,
+      category: enumFallback,
+      categoryKey: catKey,
       tipo: tipo,
       title: result['title'] as String,
       description: (result['description'] as String?) ?? '',
-      icon: EventRepository.iconForCategory(category),
+      icon: catIcon ?? EventRepository.iconForCategory(enumFallback),
       creator: creator,
       users: existingEvent?.users ?? [creator],
       from: result['start'] as TimeOfDay,
       to: result['end'] as TimeOfDay,
-      color: EventRepository.colorForCategory(category),
+      color: catColorVal != null
+          ? Color(catColorVal)
+          : EventRepository.colorForCategory(enumFallback),
       hasAlarm: (result['hasAlarm'] as bool?) ?? false,
       alarmAt: result['alarmAt'] as DateTime?,
       hasNotification: (result['hasNotif'] as bool?) ?? false,
       notificationAt: result['notifAt'] as DateTime?,
       soloParaMi: (result['soloParaMi'] as bool?) ?? false,
     );
-
+    // ... (deja el resto del método igual: guardado, checklist, return)
     try {
       final saved = await EventRepository.instance.save(newEvent, widget.date);
 
@@ -897,15 +907,19 @@ class _AddEventDialogState extends State<AddEventDialog> {
 
   bool get _isEditing => widget.initialEvent != null;
 
-  static const Map<String, List<Tipo>> _tiposPorCategoria = {
-    'Trabajo': [
+  // Categorías disponibles (integradas + personalizadas). Se llena en initState.
+  List<CalendarCategory> _allCategories = CalendarCategory.builtIns();
+
+  // Tipos sugeridos por key de categoría (las personalizadas usan el default).
+  static const Map<String, List<Tipo>> _tiposPorKey = {
+    'Laboral': [
       Tipo.Horario,
       Tipo.Reunion,
       Tipo.Entrega,
       Tipo.Checklist,
       Tipo.Otros,
     ],
-    'Eventos': [
+    'Evento': [
       Tipo.Cumpleanos,
       Tipo.Aniversario,
       Tipo.Boda,
@@ -915,25 +929,34 @@ class _AddEventDialogState extends State<AddEventDialog> {
       Tipo.Checklist,
       Tipo.Otros,
     ],
-    'Citas': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
-    'Recordatorios': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
-    'Bebé': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
-    'Período': [Tipo.Horario, Tipo.Otros],
+    'Cita': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
+    'Recordatorio': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
+    'Bebe': [Tipo.Horario, Tipo.Checklist, Tipo.Otros],
+    'Periodo': [Tipo.Horario, Tipo.Otros],
   };
 
-  List<Tipo> get _tiposActuales => _tiposPorCategoria[_category] ?? Tipo.values;
+  List<Tipo> _tiposForKey(String key) =>
+      _tiposPorKey[key] ?? const [Tipo.Horario, Tipo.Checklist, Tipo.Otros];
+
+  List<Tipo> get _tiposActuales => _tiposForKey(_category);
+
+  Future<void> _loadCategories() async {
+    final cats = await CategoryRepository.instance.getAll();
+    if (mounted) setState(() => _allCategories = cats);
+  }
 
   @override
   void initState() {
     super.initState();
+    _loadCategories(); // carga asíncrona; los built-in ya están disponibles
     final ev = widget.initialEvent;
     if (ev != null) {
       _titleController.text = ev.title;
       _descController.text = ev.description;
-      _category = EventRepository.categoryToString(ev.category);
+      _category = ev.effectiveCategoryKey; // ← key, no display name
       _start = ev.from;
       _end = ev.to;
-      final tipos = _tiposPorCategoria[_category] ?? Tipo.values;
+      final tipos = _tiposForKey(_category);
       _tipo = tipos.contains(ev.tipo) ? ev.tipo : tipos.first;
       _checklistItems = List<String>.from(widget.initialChecklistItems);
       _hasAlarm = ev.hasAlarm;
@@ -942,7 +965,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
       _notifDateTime = ev.notificationAt;
       _soloParaMi = ev.soloParaMi;
     } else {
-      _category = 'Trabajo';
+      _category = 'Laboral'; // key de "Trabajo"
       _tipo = Tipo.Horario;
       _start = const TimeOfDay(hour: 9, minute: 0);
       _end = const TimeOfDay(hour: 10, minute: 0);
@@ -1156,25 +1179,37 @@ class _AddEventDialogState extends State<AddEventDialog> {
               const SizedBox(height: 8),
 
               // Categoría
+              // Categoría
               DropdownButtonFormField<String>(
-                value: _category,
-                items: const [
-                  DropdownMenuItem(value: 'Trabajo', child: Text('Trabajo')),
-                  DropdownMenuItem(value: 'Eventos', child: Text('Eventos')),
-                  DropdownMenuItem(value: 'Citas', child: Text('Citas')),
-                  DropdownMenuItem(
-                    value: 'Recordatorios',
-                    child: Text('Recordatorios'),
-                  ),
-                  DropdownMenuItem(value: 'Bebé', child: Text('Bebé')),
-                  DropdownMenuItem(value: 'Período', child: Text('Período')),
-                ],
+                value: _allCategories.any((c) => c.key == _category)
+                    ? _category
+                    : _allCategories.first.key,
+                isExpanded: true,
+                items: _allCategories
+                    .map(
+                      (c) => DropdownMenuItem(
+                        value: c.key,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(c.icon),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                c.label,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                    .toList(),
                 onChanged: (v) {
                   if (v != null) {
                     setState(() {
                       _category = v;
-                      final tipos = _tiposPorCategoria[v] ?? Tipo.values;
-                      _tipo = tipos.first;
+                      _tipo = _tiposForKey(v).first;
                     });
                   }
                 },
@@ -1358,9 +1393,15 @@ class _AddEventDialogState extends State<AddEventDialog> {
               );
               return;
             }
+            final cat = _allCategories.firstWhere(
+              (c) => c.key == _category,
+              orElse: () => CalendarCategory.builtIns().first,
+            );
             Navigator.of(context).pop({
               'title': title,
-              'category': _category,
+              'categoryKey': cat.key,
+              'categoryColor': cat.color.value,
+              'categoryIcon': cat.icon,
               'tipo': _tipo,
               'start': _start,
               'end': _end,

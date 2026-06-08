@@ -1,6 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 16; // ← subido de 15 a 16
+  static const int version = 18; // ← subido de 15 a 16
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -107,6 +107,19 @@ class DBSchema {
       owner_name TEXT NOT NULL DEFAULT '',
       shared_with TEXT NOT NULL DEFAULT '',
       recurrence TEXT NOT NULL DEFAULT 'none',  -- ← nueva
+      synced INTEGER NOT NULL DEFAULT 0
+    )
+  """;
+  static const String tableCalendarCategories =
+      'calendar_categories'; // ← NUEVO
+
+  static const String createCalendarCategories = """
+    CREATE TABLE calendar_categories (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      color INTEGER NOT NULL DEFAULT 4280391411,
+      icon TEXT NOT NULL DEFAULT '🏷️',
+      owner_id TEXT,
       synced INTEGER NOT NULL DEFAULT 0
     )
   """;

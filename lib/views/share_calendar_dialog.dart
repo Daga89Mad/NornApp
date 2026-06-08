@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import '../models/friend_model.dart';
 import '../core/friend_repository.dart';
 import '../core/calendar_share_service.dart';
+import '../core/category_repository.dart';
+import '../models/calendar_category.dart';
 
 class ShareCalendarDialog extends StatefulWidget {
   const ShareCalendarDialog({Key? key}) : super(key: key);
@@ -70,11 +72,30 @@ class _ShareCalendarDialogState extends State<ShareCalendarDialog> {
   bool _loadingFriends = true;
   bool _sharing = false;
   bool _friendDropdownOpen = false;
+  List<_CategoryOption> _customOptions = [];
 
   @override
   void initState() {
     super.initState();
     _loadFriends();
+    _loadCustomCategories(); // ← NUEVO
+  }
+
+  Future<void> _loadCustomCategories() async {
+    final custom = await CategoryRepository.instance.getCustom();
+    if (!mounted) return;
+    setState(() {
+      _customOptions = custom
+          .map(
+            (c) => _CategoryOption(
+              key: c.key, // "cat_..." → el servicio la detecta y la comparte
+              label: c.label,
+              emoji: c.icon,
+              color: c.color,
+            ),
+          )
+          .toList();
+    });
   }
 
   Future<void> _loadFriends() async {
@@ -192,7 +213,7 @@ class _ShareCalendarDialogState extends State<ShareCalendarDialog> {
             Wrap(
               spacing: 8,
               runSpacing: 8,
-              children: _categories.map((cat) {
+              children: [..._categories, ..._customOptions].map((cat) {
                 final selected = _selectedCategories.contains(cat.key);
                 return GestureDetector(
                   onTap: () => setState(() {
@@ -220,6 +241,7 @@ class _ShareCalendarDialogState extends State<ShareCalendarDialog> {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
+                        // Indicador de selección (vuelve a su sitio)
                         AnimatedSwitcher(
                           duration: const Duration(milliseconds: 150),
                           child: Icon(
@@ -232,11 +254,19 @@ class _ShareCalendarDialogState extends State<ShareCalendarDialog> {
                           ),
                         ),
                         const SizedBox(width: 5),
-                        Icon(
-                          cat.icon,
-                          size: 14,
-                          color: selected ? cat.color : Colors.grey.shade500,
-                        ),
+                        // Icono de categoría: emoji (personalizadas) o IconData (integradas)
+                        cat.emoji != null
+                            ? Text(
+                                cat.emoji!,
+                                style: const TextStyle(fontSize: 14),
+                              )
+                            : Icon(
+                                cat.icon,
+                                size: 14,
+                                color: selected
+                                    ? cat.color
+                                    : Colors.grey.shade500,
+                              ),
                         const SizedBox(width: 5),
                         Text(
                           cat.label,
@@ -488,12 +518,14 @@ class _ShareCalendarDialogState extends State<ShareCalendarDialog> {
 class _CategoryOption {
   final String key;
   final String label;
-  final IconData icon;
+  final IconData? icon;
+  final String? emoji;
   final Color color;
   const _CategoryOption({
     required this.key,
+    this.icon,
+    this.emoji,
     required this.label,
-    required this.icon,
     required this.color,
   });
 }

@@ -30,7 +30,8 @@ class EventRepository {
       'date': dayUtc.millisecondsSinceEpoch,
       'from_minutes': e.from.hour * 60 + e.from.minute,
       'to_minutes': e.to.hour * 60 + e.to.minute,
-      'category': e.category.name,
+      'category':
+          e.categoryKey ?? e.category.name, // ← key real (built-in o custom)
       'tipo': e.tipo.name,
       'icon': e.icon,
       'creator': e.creator,
@@ -49,13 +50,15 @@ class EventRepository {
   EventItem _fromMap(Map<String, dynamic> m) {
     final fromMin = (m['from_minutes'] as int?) ?? 0;
     final toMin = (m['to_minutes'] as int?) ?? 60;
+    final rawCategory =
+        m['category'] as String?; // ← puede ser "Laboral" o "cat_..."
 
     Category parseCategory(String? n) {
       if (n == null) return Category.Evento;
       try {
         return Category.values.firstWhere((c) => c.name == n);
       } catch (_) {
-        return Category.Evento;
+        return Category.Evento; // categoría personalizada → fallback de enum
       }
     }
 
@@ -74,7 +77,8 @@ class EventRepository {
 
     return EventItem(
       id: m['id'] as String?,
-      category: parseCategory(m['category'] as String?),
+      category: parseCategory(rawCategory),
+      categoryKey: rawCategory, // ← guardamos la key efectiva siempre
       tipo: parseTipo(m['tipo'] as String?),
       title: (m['title'] as String?) ?? '',
       description: (m['description'] as String?) ?? '',

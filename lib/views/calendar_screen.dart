@@ -12,6 +12,9 @@ import '../core/firebase_sync_service.dart';
 import '../models/friend_model.dart';
 import 'day_view.dart';
 import 'share_calendar_dialog.dart';
+import '../core/category_repository.dart';
+import '../models/calendar_category.dart';
+import 'category_manager_screen.dart';
 import 'dart:math' as math;
 
 class CalendarScreen extends StatefulWidget {
@@ -31,13 +34,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
   bool _eventsLoading = true;
 
   // Preferencias
-  bool _filterTrabajo = true;
-  bool _filterEventos = true;
-  bool _filterCitas = true;
-  bool _filterRecordatorios = true;
-  bool _filterBebe = true;
-  bool _filterPeriodo = true;
+  // Categorías dinámicas + visibilidad de filtros
+  List<CalendarCategory> _categories = CalendarCategory.builtIns();
+  Set<String> _hiddenCategoryKeys = {};
   bool _filterTurnos = true;
+
   bool _compactMode = false;
   String _selectedBgName = 'Blanco';
   String _selectedDesign = 'Predeterminado';
@@ -90,6 +91,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Future<void> _init() async {
     _myUid = FirebaseAuth.instance.currentUser?.uid;
     await _loadSettings();
+    await CategoryRepository.instance
+        .importSharedCategories(); // las que me han compartido
+    await _loadCategories();
     await _loadMonth(_focusedMonth);
     await _loadFriendsWithSharedEvents();
 
@@ -107,14 +111,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
   Future<void> _loadSettings() async {
     final s = await SettingsRepository.instance.getCalendarSettings();
+    final hidden = await SettingsRepository.instance.getHiddenCategoryKeys();
     if (!mounted) return;
     setState(() {
-      _filterTrabajo = s.filterTrabajo;
-      _filterEventos = s.filterEventos;
-      _filterCitas = s.filterCitas;
-      _filterRecordatorios = s.filterRecordatorios;
-      _filterBebe = s.filterBebe;
-      _filterPeriodo = s.filterPeriodo;
+      _filterTurnos = s.filterTurnos;
+      _hiddenCategoryKeys = hidden.toSet();
       _compactMode = s.compactMode;
       _selectedBgName = _bgOptions.containsKey(s.bgName) ? s.bgName : 'Blanco';
       _selectedDesign = _designOptions.contains(s.design)
@@ -124,15 +125,49 @@ class _CalendarScreenState extends State<CalendarScreen> {
     });
   }
 
+  Future<void> _loadCategories() async {
+    final cats = await CategoryRepository.instance.getAll();
+    if (!mounted) return;
+    setState(() => _categories = cats);
+  }
+
+  Future<void> _saveFilters() async {
+    await SettingsRepository.instance.saveHiddenCategoryKeys(
+      _hiddenCategoryKeys.toList(),
+    );
+    await _saveSettings(); // persiste también el toggle de Turnos
+  }
+
+  Future<void> _openCategoryManager() async {
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const CategoryManagerScreen()));
+    await _loadCategories();
+    // Quita de "ocultas" las keys de categorías que se hayan borrado
+    final valid = _categories.map((c) => c.key).toSet();
+    _hiddenCategoryKeys.removeWhere((k) => !valid.contains(k));
+    await _saveFilters();
+    if (mounted) await _loadMonth(_focusedMonth);
+  }
+
+  Widget _buildManageCategoriesButton() {
+    return Tooltip(
+      message: 'Gestionar categorías',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: _openCategoryManager,
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Icon(Icons.tune, size: 20, color: Colors.black54),
+        ),
+      ),
+    );
+  }
+
   Future<void> _saveSettings() async {
     await SettingsRepository.instance.saveCalendarSettings(
       CalendarSettings(
-        filterTrabajo: _filterTrabajo,
-        filterEventos: _filterEventos,
-        filterCitas: _filterCitas,
-        filterRecordatorios: _filterRecordatorios,
-        filterBebe: _filterBebe,
-        filterPeriodo: _filterPeriodo,
+        filterTurnos: _filterTurnos,
         compactMode: _compactMode,
         bgName: _selectedBgName,
         design: _selectedDesign,
@@ -232,26 +267,19 @@ class _CalendarScreenState extends State<CalendarScreen> {
       if (e.ownerId != null && _hiddenFriendUids.contains(e.ownerId)) {
         return false;
       }
-      if (_filterTrabajo && e.category == Category.Laboral) return true;
-      if (_filterEventos && e.category == Category.Evento) return true;
-      if (_filterCitas && e.category == Category.Cita) return true;
-      if (_filterRecordatorios && e.category == Category.Recordatorio)
-        return true;
-      if (_filterBebe && e.category == Category.Bebe) return true;
-      if (_filterPeriodo && e.category == Category.Periodo) return true;
-      return false;
+      return !_hiddenCategoryKeys.contains(e.effectiveCategoryKey);
     }).toList();
   }
 
   List<SharedShiftInfo> _sharedShiftsForDay(DateTime day) {
-    if (_hiddenFriendUids.isNotEmpty) {
-      final key = DateTime.utc(day.year, day.month, day.day);
-      return (_sharedShiftsByDay[key] ?? [])
-          .where((s) => !_hiddenFriendUids.contains(s.ownerUid))
-          .toList();
-    }
+    // El filtro "Turnos" también afecta a los turnos que un amigo
+    // ha compartido contigo, no solo a los tuyos propios.
+    if (!_filterTurnos) return [];
+
     final key = DateTime.utc(day.year, day.month, day.day);
-    return _sharedShiftsByDay[key] ?? [];
+    final all = _sharedShiftsByDay[key] ?? [];
+    if (_hiddenFriendUids.isEmpty) return all;
+    return all.where((s) => !_hiddenFriendUids.contains(s.ownerUid)).toList();
   }
 
   List<ShiftModel> _shiftsForDay(DateTime day) {
@@ -639,59 +667,33 @@ class _CalendarScreenState extends State<CalendarScreen> {
   // ── Menú 3 puntos ──────────────────────────────────────────────────────────
 
   Widget _buildFilterSummaryMenu() {
-    final items = [
-      _FilterEntry('Trabajo', Icons.work_outline, Colors.blue, _filterTrabajo, (
-        v,
-      ) {
-        setState(() => _filterTrabajo = v);
-        _saveSettings();
-      }),
-      _FilterEntry('Eventos', Icons.celebration, Colors.amber, _filterEventos, (
-        v,
-      ) {
-        setState(() => _filterEventos = v);
-        _saveSettings();
-      }),
+    final items = <_FilterEntry>[
+      for (final cat in _categories)
+        _FilterEntry(
+          label: cat.label,
+          emoji: cat.icon,
+          color: cat.color,
+          active: !_hiddenCategoryKeys.contains(cat.key),
+          toggle: (v) {
+            setState(() {
+              if (v) {
+                _hiddenCategoryKeys.remove(cat.key);
+              } else {
+                _hiddenCategoryKeys.add(cat.key);
+              }
+            });
+            _saveFilters();
+          },
+        ),
       _FilterEntry(
-        'Citas',
-        Icons.medical_services,
-        Colors.orange,
-        _filterCitas,
-        (v) {
-          setState(() => _filterCitas = v);
-          _saveSettings();
+        label: 'Turnos',
+        icon: Icons.work_history,
+        color: Colors.teal,
+        active: _filterTurnos,
+        toggle: (v) {
+          setState(() => _filterTurnos = v);
+          _saveFilters();
         },
-      ),
-      _FilterEntry(
-        'Recordatorios',
-        Icons.notifications,
-        Colors.red,
-        _filterRecordatorios,
-        (v) {
-          setState(() => _filterRecordatorios = v);
-          _saveSettings();
-        },
-      ),
-      _FilterEntry('Bebé', Icons.child_care, Colors.pink, _filterBebe, (v) {
-        setState(() => _filterBebe = v);
-        _saveSettings();
-      }),
-      _FilterEntry(
-        'Período',
-        Icons.favorite,
-        Colors.deepPurple,
-        _filterPeriodo,
-        (v) {
-          setState(() => _filterPeriodo = v);
-          _saveSettings();
-        },
-      ),
-      _FilterEntry(
-        'Turnos',
-        Icons.work_history,
-        Colors.teal,
-        _filterTurnos,
-        (v) => setState(() => _filterTurnos = v),
       ),
     ];
 
@@ -732,9 +734,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           ],
         ),
       ),
-      onSelected: (idx) {
-        items[idx].toggle(!items[idx].active);
-      },
+      onSelected: (idx) => items[idx].toggle(!items[idx].active),
       itemBuilder: (_) => items.asMap().entries.map((e) {
         final idx = e.key;
         final entry = e.value;
@@ -746,6 +746,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               Container(
                 width: 28,
                 height: 28,
+                alignment: Alignment.center,
                 decoration: BoxDecoration(
                   color: entry.color.withOpacity(entry.active ? 0.15 : 0.06),
                   shape: BoxShape.circle,
@@ -754,11 +755,15 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     width: 1.5,
                   ),
                 ),
-                child: Icon(
-                  entry.icon,
-                  size: 15,
-                  color: entry.active ? entry.color : Colors.grey.shade400,
-                ),
+                child: entry.emoji != null
+                    ? Text(entry.emoji!, style: const TextStyle(fontSize: 14))
+                    : Icon(
+                        entry.icon,
+                        size: 15,
+                        color: entry.active
+                            ? entry.color
+                            : Colors.grey.shade400,
+                      ),
               ),
               const SizedBox(width: 10),
               Expanded(
@@ -1337,6 +1342,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       _buildFilterSummaryMenu(), // los “puntitos” para filtrar
+                      _buildManageCategoriesButton(),
                       Tooltip(
                         message: 'Compartir',
                         child: InkWell(
@@ -1616,18 +1622,20 @@ class _CalendarScreenState extends State<CalendarScreen> {
 
 class _FilterEntry {
   final String label;
-  final IconData icon;
+  final IconData? icon; // para "Turnos"
+  final String? emoji; // para categorías
   final Color color;
   final bool active;
   final void Function(bool) toggle;
 
-  const _FilterEntry(
-    this.label,
+  const _FilterEntry({
+    required this.label,
     this.icon,
-    this.color,
-    this.active,
-    this.toggle,
-  );
+    this.emoji,
+    required this.color,
+    required this.active,
+    required this.toggle,
+  });
 }
 
 // ── Bottom sheet: filtro de amigos ────────────────────────────────────────────

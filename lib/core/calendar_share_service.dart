@@ -9,6 +9,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:nornapp/core/category_repository.dart';
 import '../models/friend_model.dart';
 
 class CalendarShareService {
@@ -82,6 +83,16 @@ class CalendarShareService {
     // 3. Actualizar shift_assignments existentes si "turnos" está seleccionado
     if (categories.any((c) => c.toLowerCase() == 'turnos')) {
       await _shareExistingShiftAssignments(myUid, friendUids);
+    }
+
+    // 4. Crear/compartir categorías personalizadas para el amigo.
+    //    (Las keys personalizadas empiezan por "cat_".)
+    final customKeys = categories.where((c) => c.startsWith('cat_')).toList();
+    if (customKeys.isNotEmpty) {
+      await CategoryRepository.instance.shareCategories(
+        categoryKeys: customKeys,
+        friendUids: friendUids,
+      );
     }
 
     debugPrint('📤 Compartido: $updatedEvents eventos + turnos procesados');

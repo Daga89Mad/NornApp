@@ -44,6 +44,7 @@ class DBProvider {
     await db.execute(DBSchema.createFriends);
     await db.execute(DBSchema.createWeeklyMenus);
     await db.execute(DBSchema.createWeeklyTasks);
+    await db.execute(DBSchema.createCalendarCategories); // ← NUEVO
   }
 
   FutureOr<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -161,6 +162,11 @@ class DBProvider {
             "ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
           );
           debugPrint('Migración v17: recurrence en weekly_tasks');
+          break;
+        // ── v18: categorías personalizadas del calendario ──────────────────
+        case 18:
+          await db.execute(DBSchema.createCalendarCategories);
+          debugPrint('Migración v18: tabla calendar_categories creada');
           break;
       }
     }

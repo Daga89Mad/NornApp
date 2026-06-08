@@ -20,6 +20,7 @@ enum Tipo {
 class EventItem {
   final String? id;
   final Category category;
+  final String? categoryKey; // ← 1) el campo
   final Tipo tipo;
   final String title;
   final String description;
@@ -37,10 +38,10 @@ class EventItem {
   // ownerId: UID de Firebase del propietario.
   // null = evento propio (creado antes de este campo).
   final String? ownerId;
-
   const EventItem({
     this.id,
     required this.category,
+    this.categoryKey,
     required this.tipo,
     required this.title,
     required this.description,
@@ -57,10 +58,12 @@ class EventItem {
     this.soloParaMi = false,
     this.ownerId,
   });
-
+  String get effectiveCategoryKey =>
+      categoryKey ?? category.name; // ← 3) el getter
   EventItem copyWith({
     String? id,
     Category? category,
+    String? categoryKey,
     Tipo? tipo,
     String? title,
     String? description,
@@ -79,6 +82,7 @@ class EventItem {
   }) => EventItem(
     id: id ?? this.id,
     category: category ?? this.category,
+    categoryKey: categoryKey ?? this.categoryKey,
     tipo: tipo ?? this.tipo,
     title: title ?? this.title,
     description: description ?? this.description,
