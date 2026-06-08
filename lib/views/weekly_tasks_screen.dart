@@ -753,8 +753,12 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           myUid: _myUid,
           onAddTap: () => _showCreateDialog(preselectedDay: day),
           onToggle: (t) async {
-            await _repo.toggleDone(t);
-            _loadWeek();
+            try {
+              await _repo.toggleDone(t);
+            } catch (e) {
+              debugPrint('❌ toggleDone falló: $e');
+            }
+            if (mounted) _loadWeek();
           },
           onEditTap: _showEditDialog,
         );

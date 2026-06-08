@@ -53,37 +53,50 @@ class WeeklyTaskRepository {
     final bool isMine = task.ownerId.isEmpty || task.ownerId == _uid;
 
     // ── Tarea compartida POR OTRA persona ────────────────────────────────────
-    // No reclamamos la propiedad. Solo persistimos el cambio (p. ej. is_done)
-    // y actualizamos ÚNICAMENTE ese campo en el doc original del dueño.
     if (!isMine) {
-      final toSave = task.copyWith(synced: 0);
+      // 1) Persistimos SIEMPRE el cambio local primero (fuente de verdad de la UI).
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyTasks,
-        toSave.toMap(),
+        task.copyWith(synced: 0).toMap(),
       );
-      await _pushDoneFlagOnly(task);
+      // 2) Sincronizamos solo el flag is_done; si falla, no rompe la UI.
+      try {
+        await _pushDoneFlagOnly(task);
+      } catch (e) {
+        debugPrint('⚠️ is_done no sincronizado (tarea ajena): $e');
+      }
       return;
     }
 
     // ── Tarea PROPIA ──────────────────────────────────────────────────────────
-    final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
-      'tasks',
-    );
-    final sharedJson = sharedUids.isEmpty
-        ? ''
-        : '[${sharedUids.map((u) => '"$u"').join(',')}]';
-
-    final toSave = task.copyWith(
+    // 1) Guardado local PRIMERO, sin depender de la red.
+    var toSave = task.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
-      sharedWith: sharedJson,
       synced: 0,
     );
     await DBProvider.db.insertOrReplace(
       DBSchema.tableWeeklyTasks,
       toSave.toMap(),
     );
-    await _pushToFirebase(toSave, sharedUids);
+
+    // 2) Reparto + push a Firebase; si algo falla, el cambio ya está en local.
+    try {
+      final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
+        'tasks',
+      );
+      final sharedJson = sharedUids.isEmpty
+          ? ''
+          : '[${sharedUids.map((u) => '"$u"').join(',')}]';
+      toSave = toSave.copyWith(sharedWith: sharedJson);
+      await DBProvider.db.insertOrReplace(
+        DBSchema.tableWeeklyTasks,
+        toSave.toMap(),
+      );
+      await _pushToFirebase(toSave, sharedUids);
+    } catch (e) {
+      debugPrint('⚠️ Cambio guardado en local; falló la sincronización: $e');
+    }
   }
 
   /// Para tareas ajenas: actualiza solo el estado de hecho/no hecho sin tocar

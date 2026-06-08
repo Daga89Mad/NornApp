@@ -23,12 +23,28 @@ class DBProvider {
     final dir = await getApplicationDocumentsDirectory();
     final path = join(dir.path, _dbName);
     debugPrint('SQLite path: $path');
-    return await openDatabase(
+    final db = await openDatabase(
       path,
       version: _dbVersion,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+    await _ensureWeeklyTasksColumns(db); // ← red de seguridad idempotente
+    return db;
+  }
+
+  Future<void> _ensureWeeklyTasksColumns(Database db) async {
+    final cols = await db.rawQuery(
+      'PRAGMA table_info(${DBSchema.tableWeeklyTasks})',
+    );
+    final names = cols.map((c) => c['name'] as String).toSet();
+    if (!names.contains('recurrence')) {
+      await db.execute(
+        "ALTER TABLE ${DBSchema.tableWeeklyTasks} "
+        "ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
+      );
+      debugPrint('🛠️ Columna recurrence añadida (red de seguridad)');
+    }
   }
 
   FutureOr<void> _onCreate(Database db, int version) async {
