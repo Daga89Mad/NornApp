@@ -235,10 +235,10 @@ class WeeklyShareService {
   // ══════════════════════════════════════════════════════════════════════════
   // LISTENERS — tiempo real para items compartidos conmigo
   // ══════════════════════════════════════════════════════════════════════════
-
   void startListening({VoidCallback? onChanged}) {
     stopListening();
 
+    // ── Menús compartidos CONMIGO ─────────────────────────────────────────────
     final subMenus = _db
         .collection(_menusCol)
         .where('shared_with', arrayContains: _uid)
@@ -278,6 +278,7 @@ class WeeklyShareService {
           if (changed) onChanged?.call();
         }, onError: (e) => debugPrint('❌ Listener weekly_menus: $e'));
 
+    // ── Tareas compartidas CONMIGO (yo soy el destinatario) ───────────────────
     final subTasks = _db
         .collection(_tasksCol)
         .where('shared_with', arrayContains: _uid)
@@ -317,7 +318,50 @@ class WeeklyShareService {
           if (changed) onChanged?.call();
         }, onError: (e) => debugPrint('❌ Listener weekly_tasks: $e'));
 
-    _subscriptions.addAll([subMenus, subTasks]);
+    // ── Tareas PROPIAS (yo soy el dueño) ──────────────────────────────────────
+    // Detecta cambios que hace el destinatario sobre MIS tareas (p. ej. marca
+    // is_done). Sin este listener, cuando el otro completa una tarea mía, yo
+    // nunca me entero porque mi uid no está en su shared_with.
+    final subOwnTasks = _db
+        .collection(_tasksCol)
+        .where('owner_id', isEqualTo: _uid)
+        .snapshots()
+        .listen((snap) async {
+          bool changed = false;
+          for (final change in snap.docChanges) {
+            final data = change.doc.data();
+            if (data == null) continue;
+            switch (change.type) {
+              case DocumentChangeType.added:
+              case DocumentChangeType.modified:
+                await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyTasks, {
+                  'id': change.doc.id,
+                  'date':
+                      (data['date'] as Timestamp?)?.millisecondsSinceEpoch ?? 0,
+                  'title': data['title'] ?? '',
+                  'description': data['description'] ?? '',
+                  'is_done': (data['is_done'] ?? false) ? 1 : 0,
+                  'owner_id': data['owner_id'] ?? _uid,
+                  'owner_name': data['owner_name'] ?? '',
+                  'shared_with': _listToJson(data['shared_with']),
+                  'synced': 1,
+                });
+                changed = true;
+                break;
+              case DocumentChangeType.removed:
+                await DBProvider.db.delete(
+                  DBSchema.tableWeeklyTasks,
+                  where: 'id = ?',
+                  whereArgs: [change.doc.id],
+                );
+                changed = true;
+                break;
+            }
+          }
+          if (changed) onChanged?.call();
+        }, onError: (e) => debugPrint('❌ Listener own weekly_tasks: $e'));
+
+    _subscriptions.addAll([subMenus, subTasks, subOwnTasks]);
     debugPrint('👂 WeeklyShare listeners activos');
   }
 

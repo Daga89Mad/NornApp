@@ -3,9 +3,17 @@
 // Gestiona Firebase Cloud Messaging (FCM):
 // - Solicita permisos iOS/Android
 // - Obtiene y renueva el token FCM
-// - Guarda el token en Firestore bajo user_profiles/{uid}
+// - Guarda el token en Firestore bajo user_profiles/{uid}.fcm_tokens (ARRAY,
+//   multi-dispositivo). La Cloud Function `notifyTaskCreated` lee ese array
+//   para enviar la notificación de tarea compartida.
 // - Muestra notificaciones FCM en foreground con flutter_local_notifications
 // - Maneja tap en notificación (background / terminated)
+//
+// CAMBIO respecto a la versión anterior: antes se guardaba un único
+// `fcm_token` (string). Ahora se usa `fcm_tokens` (array) con arrayUnion /
+// arrayRemove, para soportar varios dispositivos por usuario y permitir que el
+// backend pode tokens inválidos. La Function sigue leyendo el `fcm_token`
+// antiguo como fallback, así que la migración es transparente.
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -35,6 +43,13 @@ class PushNotificationService {
 
   bool _initialized = false;
 
+  // Último token conocido; necesario para poder darlo de baja en logout.
+  String? _lastToken;
+
+  /// La app decide cómo abrir un evento al pulsar una notificación. Recibe el
+  /// eventId del payload de datos. Asígnalo desde donde tengas el router global.
+  void Function(String eventId)? onOpenEvent;
+
   // ── Init ───────────────────────────────────────────────────────────────────
 
   Future<void> init() async {
@@ -55,7 +70,9 @@ class PushNotificationService {
     // 3. Asegurar que AlarmService está inicializado (crea los canales Android)
     await AlarmService.instance.init();
 
-    // 4. Crear canal Android adicional para mensajes FCM en foreground
+    // 4. Crear canal Android adicional para mensajes FCM en foreground.
+    //    OJO: el channelId debe coincidir con el que envía la Cloud Function
+    //    (notifyTaskCreated → ANDROID_CHANNEL_ID = 'fc_push').
     await _localPlugin
         .resolvePlatformSpecificImplementation<
           AndroidFlutterLocalNotificationsPlugin
@@ -90,7 +107,7 @@ class PushNotificationService {
     await _refreshAndSaveToken();
 
     // 10. Auto-renovar token
-    _fcm.onTokenRefresh.listen((token) => _saveTokenToFirestore(token));
+    _fcm.onTokenRefresh.listen(_saveTokenToFirestore);
 
     _initialized = true;
     debugPrint('✅ PushNotificationService inicializado');
@@ -110,11 +127,13 @@ class PushNotificationService {
   Future<void> _saveTokenToFirestore(String token) async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
+    _lastToken = token;
     await _firestore.collection('user_profiles').doc(uid).set({
-      'fcm_token': token,
+      // arrayUnion es idempotente: no duplica si el token ya estaba.
+      'fcm_tokens': FieldValue.arrayUnion([token]),
       'token_updated': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
-    debugPrint('💾 FCM token guardado (uid=$uid)');
+    debugPrint('💾 FCM token guardado en fcm_tokens (uid=$uid)');
   }
 
   // ── Llamar desde login / logout ────────────────────────────────────────────
@@ -128,17 +147,19 @@ class PushNotificationService {
   /// Llama esto al hacer logout para que el dispositivo deje de recibir push.
   Future<void> onUserLoggedOut() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid != null) {
+    final token = _lastToken ?? await _fcm.getToken();
+    if (uid != null && token != null) {
       try {
         await _firestore.collection('user_profiles').doc(uid).update({
-          'fcm_token': FieldValue.delete(),
+          'fcm_tokens': FieldValue.arrayRemove([token]),
         });
       } catch (_) {}
     }
     try {
       await _fcm.deleteToken();
     } catch (_) {}
-    debugPrint('🗑️ FCM token eliminado');
+    _lastToken = null;
+    debugPrint('🗑️ FCM token dado de baja');
   }
 
   // ── Handlers ───────────────────────────────────────────────────────────────
@@ -170,6 +191,9 @@ class PushNotificationService {
 
   void _onMessageTap(RemoteMessage message) {
     debugPrint('👆 Notificación pulsada: ${message.data}');
-    // Aquí puedes añadir navegación cuando implementes el router global.
+    final eventId = message.data['eventId'] as String?;
+    if (eventId != null && eventId.isNotEmpty) {
+      onOpenEvent?.call(eventId);
+    }
   }
 }
