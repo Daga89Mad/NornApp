@@ -11,6 +11,7 @@ class WeeklyTask {
   final String sharedWith; // JSON-encoded list de UIDs
   final int synced;
   final String recurrence; // 'none' | 'daily' | 'weekly'
+  final String parentId; // '' = tarea principal; si no, id de la tarea padre
 
   const WeeklyTask({
     required this.id,
@@ -23,6 +24,7 @@ class WeeklyTask {
     this.sharedWith = '',
     this.synced = 0,
     this.recurrence = 'none',
+    this.parentId = '',
   });
 
   factory WeeklyTask.fromMap(Map<String, dynamic> m) => WeeklyTask(
@@ -36,6 +38,7 @@ class WeeklyTask {
     sharedWith: (m['shared_with'] as String?) ?? '',
     synced: (m['synced'] as int?) ?? 0,
     recurrence: (m['recurrence'] as String?) ?? 'none',
+    parentId: (m['parent_id'] as String?) ?? '',
   );
 
   Map<String, dynamic> toMap() => {
@@ -49,6 +52,7 @@ class WeeklyTask {
     'shared_with': sharedWith,
     'synced': synced,
     'recurrence': recurrence,
+    'parent_id': parentId,
   };
 
   WeeklyTask copyWith({
@@ -62,6 +66,7 @@ class WeeklyTask {
     String? sharedWith,
     int? synced,
     String? recurrence,
+    String? parentId,
   }) => WeeklyTask(
     id: id ?? this.id,
     date: date ?? this.date,
@@ -73,10 +78,13 @@ class WeeklyTask {
     sharedWith: sharedWith ?? this.sharedWith,
     synced: synced ?? this.synced,
     recurrence: recurrence ?? this.recurrence,
+    parentId: parentId ?? this.parentId,
   );
 
   bool isSharedFromOther(String myUid) =>
       ownerId.isNotEmpty && ownerId != myUid;
+
+  bool get isSubtask => parentId.isNotEmpty;
 
   static int normalizeToMidnight(DateTime d) =>
       DateTime(d.year, d.month, d.day).millisecondsSinceEpoch;

@@ -3,8 +3,10 @@
 import 'package:nornapp/views/share_weekly_dialog.dart';
 import 'package:flutter/material.dart';
 import '../models/weekly_task_model.dart';
+import '../models/friend_model.dart';
 import '../core/weekly_task_repository.dart';
 import '../core/weekly_share_service.dart';
+import '../core/friend_repository.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -34,14 +36,6 @@ const _meses = [
 ];
 const _diasCortos = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
-String _shortOwnerLabel(String ownerName) {
-  if (ownerName.isEmpty) return 'Compartido';
-  final base = ownerName.contains('@') ? ownerName.split('@').first : ownerName;
-  final firstChunk = base.split(RegExp(r'[._\s]')).first;
-  if (firstChunk.isEmpty) return 'Compartido';
-  return firstChunk[0].toUpperCase() + firstChunk.substring(1);
-}
-
 String _fmtShort(DateTime d) => '${d.day} ${_meses[d.month]}';
 String _fmtMedium(DateTime d) => '${_diasCortos[d.weekday - 1]} ${d.day}';
 String _fmtWeekRange(DateTime monday) {
@@ -63,6 +57,10 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   List<WeeklyTask> _tasks = [];
   bool _isLoading = true;
   String _myUid = '';
+
+  // Portapapeles para copiar/pegar semanas
+  List<WeeklyTask>? _clipboard;
+  DateTime? _clipboardSourceMonday;
 
   static const Color _primary = Color(0xFF00897B); // teal
   static const Color _accent = Color(0xFF26A69A);
@@ -105,7 +103,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       context: context,
       builder: (_) => const ShareWeeklyDialog(initialType: 'tasks'),
     );
-    await _repo.reapplyShares(); // ← reaplica el reparto a todas las tareas
+    await _repo.reapplyShares();
     _loadWeek();
   }
 
@@ -150,9 +148,100 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       });
   }
 
-  int _doneCountForDay(DateTime day) =>
-      _tasksForDay(day).where((t) => t.isDone).length;
-  int _totalCountForDay(DateTime day) => _tasksForDay(day).length;
+  // ══════════════════════════════════════════════════════════════════════════
+  // COPIAR / PEGAR SEMANA (con subtareas)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _copyCurrentWeek() {
+    final own = _tasks
+        .where((t) => t.ownerId == _myUid || t.ownerId.isEmpty)
+        .toList();
+    if (own.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay tareas propias que copiar')),
+      );
+      return;
+    }
+    setState(() {
+      _clipboard = List<WeeklyTask>.from(own);
+      _clipboardSourceMonday = _currentWeekStart;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${own.length} tareas copiadas. Ve a la semana destino y pulsa "Pegar aquí".',
+        ),
+        backgroundColor: Colors.teal.shade700,
+      ),
+    );
+  }
+
+  Future<void> _pasteIntoCurrentWeek() async {
+    final clip = _clipboard;
+    final source = _clipboardSourceMonday;
+    if (clip == null || source == null) return;
+
+    final offsetDays = _currentWeekStart.difference(source).inDays;
+
+    int newDateOf(WeeklyTask t) {
+      final d = DateTime.fromMillisecondsSinceEpoch(
+        t.date,
+      ).add(Duration(days: offsetDays));
+      return DateTime(d.year, d.month, d.day).millisecondsSinceEpoch;
+    }
+
+    // 1) Copiar primero las tareas principales, mapeando id viejo → id nuevo.
+    final idMap = <String, String>{};
+    for (final t in clip.where((t) => t.parentId.isEmpty)) {
+      final newId = _repo.generateId();
+      idMap[t.id] = newId;
+      await _repo.save(
+        t.copyWith(
+          id: newId,
+          date: newDateOf(t),
+          isDone: false,
+          ownerId: '',
+          ownerName: '',
+          sharedWith: '',
+          parentId: '',
+          synced: 0,
+        ),
+      );
+    }
+
+    // 2) Copiar subtareas, apuntando al nuevo id del padre (o suelta si no está).
+    for (final t in clip.where((t) => t.parentId.isNotEmpty)) {
+      final newParent = idMap[t.parentId] ?? '';
+      await _repo.save(
+        t.copyWith(
+          id: _repo.generateId(),
+          date: newDateOf(t),
+          isDone: false,
+          ownerId: '',
+          ownerName: '',
+          sharedWith: '',
+          parentId: newParent,
+          synced: 0,
+        ),
+      );
+    }
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${clip.length} tareas pegadas en esta semana'),
+        backgroundColor: Colors.green.shade600,
+      ),
+    );
+    _loadWeek();
+  }
+
+  void _cancelCopy() {
+    setState(() {
+      _clipboard = null;
+      _clipboardSourceMonday = null;
+    });
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // DIALOGS
@@ -160,6 +249,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   String recurrence = 'none';
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
+    recurrence = 'none';
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
 
@@ -167,85 +257,94 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 24,
+          ),
           title: const Text('Crear tarea'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Día',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  children: List.generate(7, (i) {
-                    final day = _currentWeekStart.add(Duration(days: i));
-                    final dayName = _fmtMedium(day);
-                    final isSelected =
-                        DateTime(day.year, day.month, day.day) ==
-                        DateTime(
-                          selectedDay.year,
-                          selectedDay.month,
-                          selectedDay.day,
-                        );
-                    return ChoiceChip(
-                      label: Text(
-                        dayName,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      selected: isSelected,
-                      selectedColor: _accent.withOpacity(0.3),
-                      onSelected: (_) => setS(() => selectedDay = day),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: titleCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Tarea *',
-                    border: OutlineInputBorder(),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Día',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  textCapitalization: TextCapitalization.sentences,
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: descCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Descripción (opcional)',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: List.generate(7, (i) {
+                      final day = _currentWeekStart.add(Duration(days: i));
+                      final dayName = _fmtMedium(day);
+                      final isSelected =
+                          DateTime(day.year, day.month, day.day) ==
+                          DateTime(
+                            selectedDay.year,
+                            selectedDay.month,
+                            selectedDay.day,
+                          );
+                      return ChoiceChip(
+                        label: Text(
+                          dayName,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        selected: isSelected,
+                        selectedColor: _accent.withOpacity(0.3),
+                        onSelected: (_) => setS(() => selectedDay = day),
+                      );
+                    }),
                   ),
-                  maxLines: 2,
-                  textCapitalization: TextCapitalization.sentences,
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Repetir',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  children:
-                      [
-                        ('none', 'No repetir'),
-                        ('daily', 'Cada día'),
-                        ('weekly', 'Cada semana'),
-                      ].map((opt) {
-                        return ChoiceChip(
-                          label: Text(
-                            opt.$2,
-                            style: const TextStyle(fontSize: 12),
-                          ),
-                          selected: recurrence == opt.$1,
-                          selectedColor: _accent.withOpacity(0.3),
-                          onSelected: (_) => setS(() => recurrence = opt.$1),
-                        );
-                      }).toList(),
-                ),
-              ],
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: titleCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Tarea *',
+                      border: OutlineInputBorder(),
+                    ),
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Descripción (opcional)',
+                      border: OutlineInputBorder(),
+                      alignLabelWithHint: true,
+                    ),
+                    minLines: 3,
+                    maxLines: 6,
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Repetir',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children:
+                        [
+                          ('none', 'No repetir'),
+                          ('daily', 'Cada día'),
+                          ('weekly', 'Cada semana'),
+                        ].map((opt) {
+                          return ChoiceChip(
+                            label: Text(
+                              opt.$2,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            selected: recurrence == opt.$1,
+                            selectedColor: _accent.withOpacity(0.3),
+                            onSelected: (_) => setS(() => recurrence = opt.$1),
+                          );
+                        }).toList(),
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -276,129 +375,6 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               },
               child: const Text(
                 'Guardar',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showAssignDialog() async {
-    // Asignar: copiar tareas de otra semana a la semana actual
-    DateTime sourceWeek = _currentWeekStart.subtract(const Duration(days: 7));
-    List<WeeklyTask> sourceTasks = [];
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Asignar tareas'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Copia las tareas de otra semana a la semana actual (se restablece el estado a pendiente).',
-                  style: TextStyle(fontSize: 13, color: Colors.grey),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      onPressed: () {
-                        setS(
-                          () => sourceWeek = sourceWeek.subtract(
-                            const Duration(days: 7),
-                          ),
-                        );
-                      },
-                    ),
-                    Expanded(
-                      child: Text(
-                        _weekLabelOf(sourceWeek),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      onPressed: () {
-                        setS(
-                          () => sourceWeek = sourceWeek.add(
-                            const Duration(days: 7),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    final tasks = await _repo.getTasksForWeek(sourceWeek);
-                    setS(() => sourceTasks = tasks);
-                  },
-                  icon: const Icon(Icons.search),
-                  label: const Text('Ver tareas de esa semana'),
-                  style: ElevatedButton.styleFrom(backgroundColor: _accent),
-                ),
-                if (sourceTasks.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    '${sourceTasks.length} tareas encontradas',
-                    style: const TextStyle(
-                      color: Colors.green,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ] else ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Sin tareas en esa semana',
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: _primary),
-              onPressed: sourceTasks.isEmpty
-                  ? null
-                  : () async {
-                      final offsetDays = _currentWeekStart
-                          .difference(sourceWeek)
-                          .inDays;
-                      for (final t in sourceTasks) {
-                        final newDate = DateTime.fromMillisecondsSinceEpoch(
-                          t.date,
-                        ).add(Duration(days: offsetDays));
-                        final newTask = t.copyWith(
-                          id: _repo.generateId(),
-                          date: DateTime(
-                            newDate.year,
-                            newDate.month,
-                            newDate.day,
-                          ).millisecondsSinceEpoch,
-                          isDone: false,
-                          synced: 0,
-                        );
-                        await _repo.save(newTask);
-                      }
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _loadWeek();
-                    },
-              child: const Text(
-                'Copiar tareas',
                 style: TextStyle(color: Colors.white),
               ),
             ),
@@ -489,85 +465,400 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     );
   }
 
+  // ── Popup de detalle/edición ampliado con subtareas ───────────────────────
   Future<void> _showEditDialog(WeeklyTask task) async {
     final titleCtrl = TextEditingController(text: task.title);
     final descCtrl = TextEditingController(text: task.description);
+    final subCtrl = TextEditingController();
+    final bool isForeign = task.isSharedFromOther(_myUid);
+    final bool isParent = task.parentId.isEmpty;
+
+    final friends = await FriendRepository.instance.getAll();
+    Set<String> sharedUids = WeeklyShareService.parseUids(task.sharedWith);
+    List<WeeklyTask> subtasks = isParent
+        ? await _repo.getSubtasks(task.id)
+        : <WeeklyTask>[];
 
     await showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Editar tarea'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: titleCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Tarea',
-                border: OutlineInputBorder(),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) {
+          Future<void> reloadSubs() async {
+            subtasks = await _repo.getSubtasks(task.id);
+            setS(() {});
+          }
+
+          return AlertDialog(
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 24,
+            ),
+            title: Text(isForeign ? 'Detalle de la tarea' : 'Editar tarea'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (isForeign)
+                      Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.only(bottom: 14),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.teal.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.teal.withOpacity(0.35),
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(
+                              Icons.people_alt_outlined,
+                              size: 18,
+                              color: Colors.teal,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Compartido por ${task.ownerName.isNotEmpty ? task.ownerName : "otra persona"}',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  color: Colors.teal,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    TextField(
+                      controller: titleCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Tarea',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: descCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Descripción',
+                        border: OutlineInputBorder(),
+                        alignLabelWithHint: true,
+                      ),
+                      minLines: 6,
+                      maxLines: 12,
+                    ),
+
+                    // ── Subtareas (solo para tareas principales) ──────────────
+                    if (isParent) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      Row(
+                        children: const [
+                          Icon(Icons.checklist, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'Subtareas',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      if (subtasks.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 4, bottom: 4),
+                          child: Text(
+                            'Sin subtareas todavía',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        )
+                      else
+                        ...subtasks.map(
+                          (s) => Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 1),
+                            child: Row(
+                              children: [
+                                InkWell(
+                                  onTap: () async {
+                                    await _repo.toggleDone(s);
+                                    await reloadSubs();
+                                  },
+                                  child: Icon(
+                                    s.isDone
+                                        ? Icons.check_circle
+                                        : Icons.radio_button_unchecked,
+                                    size: 20,
+                                    color: s.isDone ? _primary : Colors.grey,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    s.title,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      decoration: s.isDone
+                                          ? TextDecoration.lineThrough
+                                          : null,
+                                      color: s.isDone ? Colors.grey : null,
+                                    ),
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(
+                                    Icons.delete_outline,
+                                    size: 18,
+                                    color: Colors.redAccent,
+                                  ),
+                                  visualDensity: VisualDensity.compact,
+                                  onPressed: () async {
+                                    await _repo.delete(s.id);
+                                    await reloadSubs();
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: subCtrl,
+                              decoration: const InputDecoration(
+                                hintText: 'Nueva subtarea…',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                              textCapitalization: TextCapitalization.sentences,
+                              onSubmitted: (_) async {
+                                await _repo.addSubtask(task, subCtrl.text);
+                                subCtrl.clear();
+                                await reloadSubs();
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          IconButton(
+                            icon: const Icon(Icons.add_circle),
+                            color: _primary,
+                            onPressed: () async {
+                              await _repo.addSubtask(task, subCtrl.text);
+                              subCtrl.clear();
+                              await reloadSubs();
+                            },
+                          ),
+                        ],
+                      ),
+                    ],
+
+                    // ── Compartir esta tarea suelta (solo si es mía) ──────────
+                    if (!isForeign) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      Row(
+                        children: [
+                          const Icon(Icons.share_outlined, size: 18),
+                          const SizedBox(width: 8),
+                          const Expanded(
+                            child: Text(
+                              'Compartir solo esta tarea',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          TextButton.icon(
+                            icon: const Icon(Icons.person_add_alt, size: 18),
+                            label: const Text('Elegir'),
+                            onPressed: () async {
+                              final updated = await _pickFriendsForItem(
+                                friends: friends,
+                                alreadyShared: sharedUids,
+                                docId: task.id,
+                              );
+                              if (updated != null) {
+                                setS(() => sharedUids = updated);
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      if (sharedUids.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2, left: 4),
+                          child: Text(
+                            'No compartida individualmente',
+                            style: TextStyle(fontSize: 12, color: Colors.grey),
+                          ),
+                        )
+                      else
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: sharedUids.map((uid) {
+                            final f = friends.firstWhere(
+                              (fr) => fr.firebaseUid == uid,
+                              orElse: () => FriendModel(
+                                name: 'Amigo',
+                                email: '',
+                                firebaseUid: uid,
+                              ),
+                            );
+                            return Chip(
+                              label: Text(
+                                f.displayName,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              onDeleted: () async {
+                                await WeeklyShareService.instance
+                                    .unshareSingleItem(
+                                      type: 'tasks',
+                                      docId: task.id,
+                                      friendUid: uid,
+                                    );
+                                setS(() => sharedUids.remove(uid));
+                              },
+                            );
+                          }).toList(),
+                        ),
+                    ],
+                  ],
+                ),
               ),
             ),
-            const SizedBox(height: 10),
-            TextField(
-              controller: descCtrl,
-              decoration: const InputDecoration(
-                labelText: 'Descripción',
-                border: OutlineInputBorder(),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  await _repo.delete(task.id);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _loadWeek();
+                },
+                child: const Text(
+                  'Eliminar',
+                  style: TextStyle(color: Colors.redAccent),
+                ),
               ),
-              maxLines: 2,
+              TextButton.icon(
+                icon: const Icon(Icons.event_repeat, size: 18),
+                label: const Text('Mover a…'),
+                onPressed: () async {
+                  final picked = await showDatePicker(
+                    context: ctx,
+                    initialDate: DateTime.fromMillisecondsSinceEpoch(task.date),
+                    firstDate: DateTime(2020),
+                    lastDate: DateTime(2100),
+                  );
+                  if (picked == null) return;
+                  await _repo.moveToDay(task, picked);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _loadWeek();
+                },
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancelar'),
+              ),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: _primary),
+                onPressed: () async {
+                  final title = titleCtrl.text.trim();
+                  if (title.isEmpty) return;
+                  await _repo.save(
+                    task.copyWith(
+                      title: title,
+                      description: descCtrl.text.trim(),
+                      synced: 0,
+                    ),
+                  );
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  _loadWeek();
+                },
+                child: const Text(
+                  'Guardar',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    _loadWeek();
+  }
+
+  Future<Set<String>?> _pickFriendsForItem({
+    required List<FriendModel> friends,
+    required Set<String> alreadyShared,
+    required String docId,
+  }) async {
+    final valid = friends.where((f) => f.firebaseUid != null).toList();
+    if (valid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No tienes amigos para compartir')),
+      );
+      return null;
+    }
+    final selected = Set<String>.from(alreadyShared);
+
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Compartir esta tarea'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: valid.map((f) {
+                final uid = f.firebaseUid!;
+                final isSel = selected.contains(uid);
+                return CheckboxListTile(
+                  value: isSel,
+                  title: Text(f.displayName),
+                  subtitle: Text(f.email, style: const TextStyle(fontSize: 11)),
+                  secondary: Text(f.logo, style: const TextStyle(fontSize: 20)),
+                  onChanged: (v) async {
+                    if (v == true) {
+                      await WeeklyShareService.instance.shareSingleItem(
+                        type: 'tasks',
+                        docId: docId,
+                        friendUid: uid,
+                      );
+                      setS(() => selected.add(uid));
+                    } else {
+                      await WeeklyShareService.instance.unshareSingleItem(
+                        type: 'tasks',
+                        docId: docId,
+                        friendUid: uid,
+                      );
+                      setS(() => selected.remove(uid));
+                    }
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _primary),
+              onPressed: () => Navigator.pop(ctx, selected),
+              child: const Text('Listo', style: TextStyle(color: Colors.white)),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await _repo.delete(task.id);
-              if (ctx.mounted) Navigator.pop(ctx);
-              _loadWeek();
-            },
-            child: const Text(
-              'Eliminar',
-              style: TextStyle(color: Colors.redAccent),
-            ),
-          ),
-          TextButton.icon(
-            icon: const Icon(Icons.event_repeat, size: 18),
-            label: const Text('Mover a…'),
-            onPressed: () async {
-              final picked = await showDatePicker(
-                context: ctx,
-                initialDate: DateTime.fromMillisecondsSinceEpoch(task.date),
-                firstDate: DateTime(2020),
-                lastDate: DateTime(2100),
-              );
-              if (picked == null) return;
-              await _repo.moveToDay(task, picked);
-              if (ctx.mounted) Navigator.pop(ctx);
-              _loadWeek();
-            },
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancelar'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: _primary),
-            onPressed: () async {
-              final title = titleCtrl.text.trim();
-              if (title.isEmpty) return;
-              await _repo.save(
-                task.copyWith(
-                  title: title,
-                  description: descCtrl.text.trim(),
-                  synced: 0,
-                ),
-              );
-              if (ctx.mounted) Navigator.pop(ctx);
-              _loadWeek();
-            },
-            child: const Text('Guardar', style: TextStyle(color: Colors.white)),
-          ),
-        ],
       ),
     );
   }
@@ -575,8 +866,6 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   // ══════════════════════════════════════════════════════════════════════════
   // HELPERS
   // ══════════════════════════════════════════════════════════════════════════
-
-  String _weekLabelOf(DateTime monday) => _fmtWeekRange(monday);
 
   bool _isCurrentWeek() {
     final now = _mondayOf(DateTime.now());
@@ -620,6 +909,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
         children: [
           _buildTopBar(),
           _buildActionButtons(),
+          if (_clipboard != null) _buildPasteBanner(),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -690,6 +980,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   }
 
   Widget _buildActionButtons() {
+    final bool copying = _clipboard != null;
     return Container(
       color: _accent.withOpacity(0.12),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -706,10 +997,10 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: _ActionBtn(
-              icon: Icons.copy_all,
-              label: 'Asignar',
+              icon: copying ? Icons.content_paste : Icons.copy_all,
+              label: copying ? 'Pegar aquí' : 'Copiar',
               color: Colors.blueGrey,
-              onTap: _showAssignDialog,
+              onTap: copying ? _pasteIntoCurrentWeek : _copyCurrentWeek,
             ),
           ),
           const SizedBox(width: 8),
@@ -726,10 +1017,36 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     );
   }
 
+  Widget _buildPasteBanner() {
+    return Container(
+      width: double.infinity,
+      color: Colors.teal.withOpacity(0.12),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      child: Row(
+        children: [
+          const Icon(Icons.content_copy, size: 18, color: Colors.teal),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Copiaste la semana del ${_fmtShort(_clipboardSourceMonday!)}. '
+              'Navega con las flechas y pulsa "Pegar aquí".',
+              style: const TextStyle(fontSize: 12, color: Colors.teal),
+            ),
+          ),
+          TextButton(
+            onPressed: _cancelCopy,
+            child: const Text('Cancelar', style: TextStyle(fontSize: 12)),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildWeekList() {
-    // Resumen global de la semana
-    final totalDone = _tasks.where((t) => t.isDone).length;
-    final totalAll = _tasks.length;
+    // Resumen global de la semana (solo tareas principales).
+    final parents = _tasks.where((t) => t.parentId.isEmpty).toList();
+    final totalDone = parents.where((t) => t.isDone).length;
+    final totalAll = parents.length;
 
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
@@ -896,8 +1213,16 @@ class _TaskDayCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final dayName = _diasSemana[day.weekday - 1];
     final dayFormatted = _fmtShort(day);
-    final doneCount = tasks.where((t) => t.isDone).length;
-    final totalCount = tasks.length;
+
+    // Separar principales y subtareas.
+    final parents = tasks.where((t) => t.parentId.isEmpty).toList();
+    final subsByParent = <String, List<WeeklyTask>>{};
+    for (final t in tasks.where((t) => t.parentId.isNotEmpty)) {
+      subsByParent.putIfAbsent(t.parentId, () => []).add(t);
+    }
+
+    final doneCount = parents.where((t) => t.isDone).length;
+    final totalCount = parents.length;
     final headerColor = isToday ? primaryColor : Colors.grey.shade700;
 
     return Card(
@@ -979,7 +1304,7 @@ class _TaskDayCard extends StatelessWidget {
             ),
           ),
           // Tareas
-          if (tasks.isEmpty)
+          if (parents.isEmpty && subsByParent.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
               child: Text(
@@ -988,133 +1313,158 @@ class _TaskDayCard extends StatelessWidget {
               ),
             )
           else
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: tasks.length,
-              separatorBuilder: (_, __) => Divider(
-                height: 1,
-                indent: 16,
-                endIndent: 16,
-                color: Colors.grey.shade200,
-              ),
-              itemBuilder: (_, i) {
-                final t = tasks[i];
-                return ListTile(
-                  dense: true,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 2,
-                  ),
-                  leading: GestureDetector(
-                    onTap: () => onToggle(t),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      width: 24,
-                      height: 24,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: t.isDone ? primaryColor : Colors.transparent,
-                        border: Border.all(
-                          color: t.isDone ? primaryColor : Colors.grey.shade400,
-                          width: 2,
-                        ),
+            Builder(
+              builder: (_) {
+                final parentIds = parents.map((p) => p.id).toSet();
+                final orphans = <WeeklyTask>[
+                  for (final entry in subsByParent.entries)
+                    if (!parentIds.contains(entry.key)) ...entry.value,
+                ];
+                return Column(
+                  children: [
+                    for (final t in parents) ...[
+                      _taskTile(t, subs: subsByParent[t.id] ?? const []),
+                      for (final s in (subsByParent[t.id] ?? const []))
+                        _taskTile(s, isSub: true),
+                      Divider(
+                        height: 1,
+                        indent: 16,
+                        endIndent: 16,
+                        color: Colors.grey.shade200,
                       ),
-                      child: t.isDone
-                          ? const Icon(
-                              Icons.check,
-                              size: 14,
-                              color: Colors.white,
-                            )
-                          : null,
-                    ),
-                  ),
-                  title: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          t.title,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                            decoration: t.isDone
-                                ? TextDecoration.lineThrough
-                                : null,
-                            color: t.isDone ? Colors.grey : null,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (t.isSharedFromOther(myUid)) ...[
-                        const SizedBox(width: 6),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 90),
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.teal.withOpacity(0.12),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: Colors.teal.withOpacity(0.4),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(
-                                  Icons.people_alt_outlined,
-                                  size: 10,
-                                  color: Colors.teal,
-                                ),
-                                const SizedBox(width: 3),
-                                Flexible(
-                                  child: Text(
-                                    _shortOwnerLabel(t.ownerName),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 9,
-                                      color: Colors.teal,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
                     ],
-                  ),
-                  subtitle: t.description.isNotEmpty
-                      ? Text(
-                          t.description,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: t.isDone ? Colors.grey.shade400 : null,
-                          ),
-                        )
-                      : null,
-                  trailing: IconButton(
-                    icon: Icon(
-                      Icons.edit_outlined,
-                      size: 18,
-                      color: Colors.grey.shade500,
-                    ),
-                    onPressed: () => onEditTap(t),
-                    visualDensity: VisualDensity.compact,
-                    padding: EdgeInsets.zero,
-                  ),
-                  onTap: () => onToggle(t),
+                    // Subtareas cuyo padre no está visible este día:
+                    // se muestran como tareas normales para no perderlas.
+                    for (final o in orphans) _taskTile(o),
+                  ],
                 );
               },
             ),
         ],
       ),
+    );
+  }
+
+  Widget _taskTile(
+    WeeklyTask t, {
+    bool isSub = false,
+    List<WeeklyTask> subs = const [],
+  }) {
+    final shared = t.isSharedFromOther(myUid);
+    final subDone = subs.where((s) => s.isDone).length;
+
+    return ListTile(
+      dense: isSub,
+      isThreeLine: !isSub && t.description.isNotEmpty,
+      contentPadding: EdgeInsets.only(left: isSub ? 44 : 12, right: 12),
+      leading: SizedBox(
+        width: isSub ? 22 : 36,
+        height: isSub ? 22 : 36,
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            GestureDetector(
+              onTap: () => onToggle(t),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: isSub ? 20 : 24,
+                height: isSub ? 20 : 24,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: t.isDone ? primaryColor : Colors.transparent,
+                  border: Border.all(
+                    color: t.isDone ? primaryColor : Colors.grey.shade400,
+                    width: 2,
+                  ),
+                ),
+                child: t.isDone
+                    ? const Icon(Icons.check, size: 13, color: Colors.white)
+                    : null,
+              ),
+            ),
+            if (shared && !isSub)
+              Positioned(
+                right: -2,
+                bottom: -2,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: Colors.teal,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                  child: const Icon(
+                    Icons.people_alt,
+                    size: 9,
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              t.title,
+              style: TextStyle(
+                fontWeight: isSub ? FontWeight.w500 : FontWeight.w600,
+                fontSize: isSub ? 13 : 14,
+                decoration: t.isDone ? TextDecoration.lineThrough : null,
+                color: t.isDone ? Colors.grey : null,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (!isSub && subs.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(left: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+              decoration: BoxDecoration(
+                color: primaryColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '$subDone/${subs.length}',
+                style: TextStyle(
+                  fontSize: 10,
+                  color: primaryColor,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+        ],
+      ),
+      // Descripción: hasta 3 líneas visibles (solo en principales).
+      subtitle: (!isSub && t.description.isNotEmpty)
+          ? Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Text(
+                t.description,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: t.isDone ? Colors.grey.shade400 : null,
+                ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+            )
+          : null,
+      trailing: isSub
+          ? null
+          : IconButton(
+              icon: Icon(
+                Icons.edit_outlined,
+                size: 18,
+                color: Colors.grey.shade500,
+              ),
+              onPressed: () => onEditTap(t),
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+            ),
+      onTap: () => isSub ? onToggle(t) : onEditTap(t),
     );
   }
 }

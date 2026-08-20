@@ -1,6 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 18; // ← subido de 15 a 16
+  static const int version = 19; // ← v19: parent_id en weekly_tasks (subtareas)
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -106,7 +106,8 @@ class DBSchema {
       owner_id TEXT NOT NULL DEFAULT '',
       owner_name TEXT NOT NULL DEFAULT '',
       shared_with TEXT NOT NULL DEFAULT '',
-      recurrence TEXT NOT NULL DEFAULT 'none',  -- ← nueva
+      recurrence TEXT NOT NULL DEFAULT 'none',
+      parent_id TEXT NOT NULL DEFAULT '',      -- ← subtareas
       synced INTEGER NOT NULL DEFAULT 0
     )
   """;

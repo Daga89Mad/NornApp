@@ -33,7 +33,6 @@ class WeeklyMenuRepository {
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
-      // Traer propios Y compartidos conmigo (owner_id distinto = compartido)
       where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
       whereArgs: [
         monday.millisecondsSinceEpoch,
@@ -43,7 +42,6 @@ class WeeklyMenuRepository {
       orderBy: 'date ASC, meal_type ASC',
     );
 
-    // Filtrar: propios + los que tienen mi uid en shared_with local
     return rows
         .map(WeeklyMenuEntry.fromMap)
         .where((e) => e.ownerId == _uid || _isSharedWithMe(e.sharedWith))
@@ -55,20 +53,49 @@ class WeeklyMenuRepository {
     return sharedWith.contains('"$_uid"');
   }
 
+  /// Devuelve todos los menús (propios y compartidos conmigo) cuyo día cae
+  /// dentro del mes de [anyDayInMonth].
+  Future<List<WeeklyMenuEntry>> getEntriesForMonth(
+    DateTime anyDayInMonth,
+  ) async {
+    final firstDay = DateTime(anyDayInMonth.year, anyDayInMonth.month, 1);
+    // Día 0 del mes siguiente = último día de este mes.
+    final lastDay = DateTime(
+      anyDayInMonth.year,
+      anyDayInMonth.month + 1,
+      0,
+      23,
+      59,
+      59,
+    );
+
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyMenus,
+      where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
+      whereArgs: [
+        firstDay.millisecondsSinceEpoch,
+        lastDay.millisecondsSinceEpoch,
+        _uid,
+      ],
+      orderBy: 'date ASC, meal_type ASC',
+    );
+
+    return rows
+        .map(WeeklyMenuEntry.fromMap)
+        .where((e) => e.ownerId == _uid || _isSharedWithMe(e.sharedWith))
+        .toList();
+  }
+
   /// Guarda un nuevo entry o actualiza uno existente.
-  /// Si el menú es de otra persona (compartido conmigo), solo sincroniza el
-  /// contenido sin tocar owner_id / owner_name / shared_with.
   Future<void> save(WeeklyMenuEntry entry) async {
     final bool isMine = entry.ownerId.isEmpty || entry.ownerId == _uid;
 
     // ── Menú compartido POR OTRA persona ──────────────────────────────────────
     if (!isMine) {
-      // 1) Guardado local PRIMERO (fuente de verdad de la UI).
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyMenus,
         entry.copyWith(synced: 0).toMap(),
       );
-      // 2) Empujamos SOLO contenido; si falla, no rompe la UI.
       try {
         await _pushContentOnly(entry);
       } catch (e) {
@@ -78,12 +105,14 @@ class WeeklyMenuRepository {
     }
 
     // ── Menú PROPIO ───────────────────────────────────────────────────────────
-    final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
+    // shared_with = UNIÓN de lo ya compartido en este item + reparto global.
+    // Así los compartidos individuales NO se pierden al editar/guardar.
+    final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
       'menus',
     );
-    final sharedJson = sharedUids.isEmpty
-        ? ''
-        : '[${sharedUids.map((u) => '"$u"').join(',')}]';
+    final merged = WeeklyShareService.parseUids(entry.sharedWith)
+      ..addAll(globalUids);
+    final sharedJson = WeeklyShareService.uidsToJson(merged);
 
     final toSave = entry.copyWith(
       ownerId: _uid,
@@ -95,7 +124,7 @@ class WeeklyMenuRepository {
       DBSchema.tableWeeklyMenus,
       toSave.toMap(),
     );
-    _pushToFirebase(toSave, sharedUids);
+    _pushToFirebase(toSave, merged.toList());
   }
 
   Future<void> delete(String id) async {
@@ -209,11 +238,9 @@ class WeeklyMenuRepository {
         'description': entry.description,
         'owner_id': _uid,
         'owner_name': _displayName,
+        'shared_with': sharedUids,
         'updated_at': FieldValue.serverTimestamp(),
       };
-      // Reescribimos siempre shared_with para reflejar el reparto actual,
-      // incluso si queda vacío (al dejar de compartir).
-      payload['shared_with'] = sharedUids;
       await _firestore
           .collection(_collection)
           .doc(entry.id)
@@ -227,9 +254,6 @@ class WeeklyMenuRepository {
     }
   }
 
-  /// Para menús ajenos: actualiza solo los campos de contenido sin tocar
-  /// owner_id, owner_name ni shared_with, así el dueño no pierde el menú ni el
-  /// reparto. Las claves coinciden con las permitidas por las reglas de Firestore.
   Future<void> _pushContentOnly(WeeklyMenuEntry entry) async {
     if (_uid.isEmpty) return;
     await _firestore.collection(_collection).doc(entry.id).set({
@@ -262,7 +286,9 @@ class WeeklyMenuRepository {
     return DateTime(monday.year, monday.month, monday.day);
   }
 
-  String generateId() => 'wm_${_uid}_${DateTime.now().millisecondsSinceEpoch}';
+  static int _idCounter = 0;
+  String generateId() =>
+      'wm_${_uid}_${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
 
   String _listToJson(dynamic raw) {
     if (raw == null) return '';

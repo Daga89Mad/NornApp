@@ -25,6 +25,7 @@ class WeeklyTaskRepository {
   // LOCAL (SQLite)
   // ══════════════════════════════════════════════════════════════════════════
 
+  /// Devuelve TODAS las tareas de la semana (principales y subtareas).
   Future<List<WeeklyTask>> getTasksForWeek(DateTime weekStart) async {
     final monday = _mondayOf(weekStart);
     final sunday = monday.add(
@@ -44,6 +45,17 @@ class WeeklyTaskRepository {
         .toList();
   }
 
+  /// Subtareas de una tarea concreta.
+  Future<List<WeeklyTask>> getSubtasks(String parentId) async {
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'parent_id = ?',
+      whereArgs: [parentId],
+      orderBy: 'title ASC',
+    );
+    return rows.map(WeeklyTask.fromMap).toList();
+  }
+
   bool _isSharedWithMe(String sharedWith) {
     if (sharedWith.isEmpty) return false;
     return sharedWith.contains('"$_uid"');
@@ -54,12 +66,10 @@ class WeeklyTaskRepository {
 
     // ── Tarea compartida POR OTRA persona ────────────────────────────────────
     if (!isMine) {
-      // 1) Persistimos SIEMPRE el cambio local primero (fuente de verdad de la UI).
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyTasks,
         task.copyWith(synced: 0).toMap(),
       );
-      // 2) Sincronizamos solo el flag is_done; si falla, no rompe la UI.
       try {
         await _pushDoneFlagOnly(task);
       } catch (e) {
@@ -69,7 +79,6 @@ class WeeklyTaskRepository {
     }
 
     // ── Tarea PROPIA ──────────────────────────────────────────────────────────
-    // 1) Guardado local PRIMERO, sin depender de la red.
     var toSave = task.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
@@ -80,27 +89,41 @@ class WeeklyTaskRepository {
       toSave.toMap(),
     );
 
-    // 2) Reparto + push a Firebase; si algo falla, el cambio ya está en local.
     try {
-      final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
+      // shared_with = UNIÓN de lo ya compartido en el item + reparto global.
+      final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
         'tasks',
       );
-      final sharedJson = sharedUids.isEmpty
-          ? ''
-          : '[${sharedUids.map((u) => '"$u"').join(',')}]';
+      final merged = WeeklyShareService.parseUids(task.sharedWith)
+        ..addAll(globalUids);
+      final sharedJson = WeeklyShareService.uidsToJson(merged);
       toSave = toSave.copyWith(sharedWith: sharedJson);
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyTasks,
         toSave.toMap(),
       );
-      await _pushToFirebase(toSave, sharedUids);
+      await _pushToFirebase(toSave, merged.toList());
     } catch (e) {
       debugPrint('⚠️ Cambio guardado en local; falló la sincronización: $e');
     }
   }
 
-  /// Para tareas ajenas: actualiza solo el estado de hecho/no hecho sin tocar
-  /// owner_id ni shared_with, así el dueño no pierde la tarea ni el reparto.
+  /// Crea una subtarea colgando de [parent].
+  Future<void> addSubtask(WeeklyTask parent, String title) async {
+    final t = title.trim();
+    if (t.isEmpty) return;
+    final sub = WeeklyTask(
+      id: generateId(),
+      date: parent.date,
+      title: t,
+      description: '',
+      isDone: false,
+      ownerId: '', // save() lo marca como mío
+      parentId: parent.id,
+    );
+    await save(sub);
+  }
+
   Future<void> _pushDoneFlagOnly(WeeklyTask task) async {
     if (_uid.isEmpty) return;
     try {
@@ -117,17 +140,13 @@ class WeeklyTaskRepository {
     }
   }
 
-  /// Reaplica el reparto actual a TODAS mis tareas locales y las reempuja.
-  /// Llamar al cerrar el diálogo de compartir y al abrir la pantalla, para que
-  /// el otro usuario siempre vea las tareas sin tener que volver a compartir.
+  /// Reaplica el reparto global a TODAS mis tareas, conservando además los
+  /// compartidos individuales que cada tarea ya tuviera.
   Future<void> reapplyShares() async {
     if (_uid.isEmpty) return;
-    final sharedUids = await WeeklyShareService.instance.getSharedUidsForType(
+    final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
       'tasks',
     );
-    final sharedJson = sharedUids.isEmpty
-        ? ''
-        : '[${sharedUids.map((u) => '"$u"').join(',')}]';
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
@@ -135,11 +154,15 @@ class WeeklyTaskRepository {
       whereArgs: [_uid],
     );
     for (final row in rows) {
-      final t = WeeklyTask.fromMap(
-        row,
-      ).copyWith(sharedWith: sharedJson, synced: 0);
+      final base = WeeklyTask.fromMap(row);
+      final merged = WeeklyShareService.parseUids(base.sharedWith)
+        ..addAll(globalUids);
+      final t = base.copyWith(
+        sharedWith: WeeklyShareService.uidsToJson(merged),
+        synced: 0,
+      );
       await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyTasks, t.toMap());
-      await _pushToFirebase(t, sharedUids);
+      await _pushToFirebase(t, merged.toList());
     }
     debugPrint('🔁 Reaplicado reparto a ${rows.length} tareas');
   }
@@ -148,7 +171,23 @@ class WeeklyTaskRepository {
     await save(task.copyWith(isDone: !task.isDone));
   }
 
+  /// Borra una tarea y, si es principal, también sus subtareas.
   Future<void> delete(String id) async {
+    // Subtareas asociadas
+    final subs = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'parent_id = ?',
+      whereArgs: [id],
+    );
+    for (final s in subs) {
+      final sid = s['id'] as String;
+      await DBProvider.db.delete(
+        DBSchema.tableWeeklyTasks,
+        where: 'id = ?',
+        whereArgs: [sid],
+      );
+      _deleteFromFirebase(sid);
+    }
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTasks,
       where: 'id = ?',
@@ -235,6 +274,8 @@ class WeeklyTaskRepository {
           'owner_id': data['owner_id'] ?? _uid,
           'owner_name': data['owner_name'] ?? '',
           'shared_with': _listToJson(data['shared_with']),
+          'recurrence': data['recurrence'] ?? 'none',
+          'parent_id': data['parent_id'] ?? '',
           'synced': 1,
         };
       }).toList();
@@ -256,9 +297,11 @@ class WeeklyTaskRepository {
         'is_done': task.isDone,
         'owner_id': _uid,
         'owner_name': _displayName,
+        'shared_with': sharedUids,
+        'recurrence': task.recurrence,
+        'parent_id': task.parentId,
         'updated_at': FieldValue.serverTimestamp(),
       };
-      payload['shared_with'] = sharedUids;
       await _firestore
           .collection(_collection)
           .doc(task.id)
@@ -290,7 +333,9 @@ class WeeklyTaskRepository {
     return DateTime(monday.year, monday.month, monday.day);
   }
 
-  String generateId() => 'wt_${_uid}_${DateTime.now().millisecondsSinceEpoch}';
+  static int _idCounter = 0;
+  String generateId() =>
+      'wt_${_uid}_${DateTime.now().microsecondsSinceEpoch}_${_idCounter++}';
 
   String _listToJson(dynamic raw) {
     if (raw == null) return '';
@@ -323,17 +368,21 @@ class WeeklyTaskRepository {
     }
   }
 
-  /// Mueve una tarea a otro día (cambia su fecha).
+  /// Mueve una tarea a otro día (cambia su fecha). Arrastra sus subtareas.
   Future<void> moveToDay(WeeklyTask task, DateTime newDay) async {
-    await save(
-      task.copyWith(
-        date: DateTime(
-          newDay.year,
-          newDay.month,
-          newDay.day,
-        ).millisecondsSinceEpoch,
-        synced: 0,
-      ),
-    );
+    final newDate = DateTime(
+      newDay.year,
+      newDay.month,
+      newDay.day,
+    ).millisecondsSinceEpoch;
+    await save(task.copyWith(date: newDate, synced: 0));
+
+    // Mover también las subtareas para que sigan al padre.
+    if (task.parentId.isEmpty) {
+      final subs = await getSubtasks(task.id);
+      for (final s in subs) {
+        await save(s.copyWith(date: newDate, synced: 0));
+      }
+    }
   }
 }

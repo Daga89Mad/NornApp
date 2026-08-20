@@ -74,6 +74,7 @@ class WeeklyMenuEntry {
 
   static const List<String> mealTypes = [
     'Desayuno',
+    'Media mañana',
     'Almuerzo',
     'Merienda',
     'Cena',

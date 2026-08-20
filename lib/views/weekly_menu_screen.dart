@@ -3,8 +3,11 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/weekly_menu_model.dart';
+import '../models/friend_model.dart';
 import '../core/weekly_menu_repository.dart';
 import '../core/weekly_share_service.dart';
+import '../core/friend_repository.dart';
+import 'shopping_list_screen.dart';
 import 'share_weekly_dialog.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -56,6 +59,10 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   bool _isLoading = true;
   String _myUid = '';
 
+  // ── Portapapeles para copiar/pegar semanas ────────────────────────────────
+  List<WeeklyMenuEntry>? _clipboard;
+  DateTime? _clipboardSourceMonday;
+
   static const Color _primary = Color(0xFF5C6BC0);
   static const Color _accent = Color(0xFF7986CB);
 
@@ -65,7 +72,6 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     _myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _currentWeekStart = _mondayOf(DateTime.now());
     _loadWeek();
-    // Escuchar cambios en tiempo real de menús compartidos conmigo
     WeeklyShareService.instance.startListening(
       onChanged: () {
         if (mounted) _loadWeek();
@@ -98,7 +104,18 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
       context: context,
       builder: (_) => const ShareWeeklyDialog(initialType: 'menus'),
     );
-    _loadWeek(); // Recargar por si acaso cambiaron las preferencias de compartir
+    _loadWeek();
+  }
+
+  void _openShoppingList() {
+    // Usa el mes del jueves de la semana visible como "mes de la semana",
+    // así una semana a caballo entre dos meses se asigna al mes mayoritario.
+    final reference = _currentWeekStart.add(const Duration(days: 3));
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => ShoppingListScreen(initialMonth: reference),
+      ),
+    );
   }
 
   void _prevWeek() {
@@ -137,9 +154,87 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         .where((e) => e.date >= midnight && e.date <= endOfDay)
         .toList()
       ..sort((a, b) {
-        const order = ['Desayuno', 'Almuerzo', 'Merienda', 'Cena', 'Otro'];
+        const order = [
+          'Desayuno',
+          'Media mañana',
+          'Almuerzo',
+          'Merienda',
+          'Cena',
+          'Otro',
+        ];
         return order.indexOf(a.mealType).compareTo(order.indexOf(b.mealType));
       });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // COPIAR / PEGAR SEMANA
+  // ══════════════════════════════════════════════════════════════════════════
+
+  void _copyCurrentWeek() {
+    // Copiamos solo los menús propios de la semana visible.
+    final own = _entries
+        .where((e) => e.ownerId == _myUid || e.ownerId.isEmpty)
+        .toList();
+    if (own.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No hay menús propios que copiar')),
+      );
+      return;
+    }
+    setState(() {
+      _clipboard = List<WeeklyMenuEntry>.from(own);
+      _clipboardSourceMonday = _currentWeekStart;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '${own.length} menús copiados. Ve a la semana destino y pulsa "Pegar aquí".',
+        ),
+        backgroundColor: Colors.teal.shade600,
+      ),
+    );
+  }
+
+  Future<void> _pasteIntoCurrentWeek() async {
+    final clip = _clipboard;
+    final source = _clipboardSourceMonday;
+    if (clip == null || source == null) return;
+
+    final offsetDays = _currentWeekStart.difference(source).inDays;
+    for (final e in clip) {
+      final newDate = DateTime.fromMillisecondsSinceEpoch(
+        e.date,
+      ).add(Duration(days: offsetDays));
+      // Reseteamos propiedad → se guardan como míos y se sincronizan de cero.
+      final copy = e.copyWith(
+        id: _repo.generateId(),
+        date: DateTime(
+          newDate.year,
+          newDate.month,
+          newDate.day,
+        ).millisecondsSinceEpoch,
+        ownerId: '',
+        ownerName: '',
+        sharedWith: '',
+        synced: 0,
+      );
+      await _repo.save(copy);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${clip.length} menús pegados en esta semana'),
+        backgroundColor: Colors.green.shade600,
+      ),
+    );
+    _loadWeek();
+  }
+
+  void _cancelCopy() {
+    setState(() {
+      _clipboard = null;
+      _clipboardSourceMonday = null;
+    });
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -156,79 +251,86 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 24,
+          ),
           title: const Text('Crear menú'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Selector de día
-                const Text(
-                  'Día',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  children: List.generate(7, (i) {
-                    final day = _currentWeekStart.add(Duration(days: i));
-                    final dayName = _fmtMedium(day);
-                    final isSelected =
-                        DateTime(day.year, day.month, day.day) ==
-                        DateTime(
-                          selectedDay.year,
-                          selectedDay.month,
-                          selectedDay.day,
-                        );
-                    return ChoiceChip(
-                      label: Text(
-                        dayName,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      selected: isSelected,
-                      selectedColor: _accent.withOpacity(0.3),
-                      onSelected: (_) => setS(() => selectedDay = day),
-                    );
-                  }),
-                ),
-                const SizedBox(height: 14),
-                // Tipo de comida
-                const Text(
-                  'Tipo',
-                  style: TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 6,
-                  children: WeeklyMenuEntry.mealTypes.map((t) {
-                    return ChoiceChip(
-                      label: Text(t),
-                      selected: mealType == t,
-                      selectedColor: _accent.withOpacity(0.3),
-                      onSelected: (_) => setS(() => mealType = t),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: titleCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Plato / Menú *',
-                    border: OutlineInputBorder(),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Día',
+                    style: TextStyle(fontWeight: FontWeight.w600),
                   ),
-                  textCapitalization: TextCapitalization.sentences,
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: descCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Notas (opcional)',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: List.generate(7, (i) {
+                      final day = _currentWeekStart.add(Duration(days: i));
+                      final dayName = _fmtMedium(day);
+                      final isSelected =
+                          DateTime(day.year, day.month, day.day) ==
+                          DateTime(
+                            selectedDay.year,
+                            selectedDay.month,
+                            selectedDay.day,
+                          );
+                      return ChoiceChip(
+                        label: Text(
+                          dayName,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        selected: isSelected,
+                        selectedColor: _accent.withOpacity(0.3),
+                        onSelected: (_) => setS(() => selectedDay = day),
+                      );
+                    }),
                   ),
-                  maxLines: 2,
-                  textCapitalization: TextCapitalization.sentences,
-                ),
-              ],
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Tipo',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 6,
+                    children: WeeklyMenuEntry.mealTypes.map((t) {
+                      return ChoiceChip(
+                        label: Text(t),
+                        selected: mealType == t,
+                        selectedColor: _accent.withOpacity(0.3),
+                        onSelected: (_) => setS(() => mealType = t),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 14),
+                  TextField(
+                    controller: titleCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Plato / Menú *',
+                      border: OutlineInputBorder(),
+                    ),
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Notas (opcional)',
+                      border: OutlineInputBorder(),
+                      alignLabelWithHint: true,
+                    ),
+                    minLines: 3,
+                    maxLines: 6,
+                    textCapitalization: TextCapitalization.sentences,
+                  ),
+                ],
+              ),
             ),
           ),
           actions: [
@@ -268,131 +370,8 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     );
   }
 
-  Future<void> _showAssignDialog() async {
-    // Asignar: copiar menús de otra semana a la semana actual
-    DateTime sourceWeek = _currentWeekStart.subtract(const Duration(days: 7));
-    List<WeeklyMenuEntry> sourceEntries = [];
-
-    await showDialog(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Asignar menú'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Copia los menús de otra semana a la semana actual.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.chevron_left),
-                      onPressed: () {
-                        setS(
-                          () => sourceWeek = sourceWeek.subtract(
-                            const Duration(days: 7),
-                          ),
-                        );
-                      },
-                    ),
-                    Expanded(
-                      child: Text(
-                        _weekLabelOf(sourceWeek),
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.chevron_right),
-                      onPressed: () {
-                        setS(
-                          () => sourceWeek = sourceWeek.add(
-                            const Duration(days: 7),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ElevatedButton.icon(
-                  onPressed: () async {
-                    final entries = await _repo.getEntriesForWeek(sourceWeek);
-                    setS(() => sourceEntries = entries);
-                  },
-                  icon: const Icon(Icons.search),
-                  label: const Text('Ver menús de esa semana'),
-                  style: ElevatedButton.styleFrom(backgroundColor: _accent),
-                ),
-                if (sourceEntries.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    '${sourceEntries.length} entradas encontradas',
-                    style: const TextStyle(
-                      color: Colors.green,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ] else if (sourceEntries.isEmpty) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Sin entradas en esa semana',
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar'),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: _primary),
-              onPressed: sourceEntries.isEmpty
-                  ? null
-                  : () async {
-                      // Calcular offset de días entre semanas
-                      final offsetDays = _currentWeekStart
-                          .difference(sourceWeek)
-                          .inDays;
-                      for (final e in sourceEntries) {
-                        final newDate = DateTime.fromMillisecondsSinceEpoch(
-                          e.date,
-                        ).add(Duration(days: offsetDays));
-                        final newEntry = e.copyWith(
-                          id: _repo.generateId(),
-                          date: DateTime(
-                            newDate.year,
-                            newDate.month,
-                            newDate.day,
-                          ).millisecondsSinceEpoch,
-                          synced: 0,
-                        );
-                        await _repo.save(newEntry);
-                      }
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _loadWeek();
-                    },
-              child: const Text(
-                'Copiar menús',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Future<void> _showRemoveDialog() async {
-    String scope = 'semana'; // 'semana' o 'dia'
+    String scope = 'semana';
     DateTime selectedDay = _currentWeekStart;
 
     await showDialog(
@@ -472,49 +451,180 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     );
   }
 
+  // ── Popup de detalle/edición ampliado ─────────────────────────────────────
   Future<void> _showEditDialog(WeeklyMenuEntry entry) async {
     final titleCtrl = TextEditingController(text: entry.title);
     final descCtrl = TextEditingController(text: entry.description);
     String mealType = entry.mealType;
+    final bool isForeign = entry.isSharedFromOther(_myUid);
+
+    // Cargamos amigos para poder mostrar/gestionar el compartir individual.
+    final friends = await FriendRepository.instance.getAll();
+    Set<String> sharedUids = WeeklyShareService.parseUids(entry.sharedWith);
 
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
-          title: const Text('Editar entrada'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Wrap(
-                  spacing: 6,
-                  children: WeeklyMenuEntry.mealTypes.map((t) {
-                    return ChoiceChip(
-                      label: Text(t),
-                      selected: mealType == t,
-                      selectedColor: _accent.withOpacity(0.3),
-                      onSelected: (_) => setS(() => mealType = t),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: titleCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Plato / Menú',
-                    border: OutlineInputBorder(),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 12,
+            vertical: 24,
+          ),
+          title: Text(isForeign ? 'Detalle del menú' : 'Editar menú'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Aviso de quién lo compartió contigo
+                  if (isForeign)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 14),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.teal.withOpacity(0.10),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(
+                          color: Colors.teal.withOpacity(0.35),
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.people_alt_outlined,
+                            size: 18,
+                            color: Colors.teal,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Compartido por ${entry.ownerName.isNotEmpty ? entry.ownerName : "otra persona"}',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: Colors.teal,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  Wrap(
+                    spacing: 6,
+                    children: WeeklyMenuEntry.mealTypes.map((t) {
+                      return ChoiceChip(
+                        label: Text(t),
+                        selected: mealType == t,
+                        selectedColor: _accent.withOpacity(0.3),
+                        onSelected: (_) => setS(() => mealType = t),
+                      );
+                    }).toList(),
                   ),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: descCtrl,
-                  decoration: const InputDecoration(
-                    labelText: 'Notas',
-                    border: OutlineInputBorder(),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: titleCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Plato / Menú',
+                      border: OutlineInputBorder(),
+                      alignLabelWithHint: true,
+                    ),
+                    minLines: 1,
+                    maxLines: 4,
+                    textCapitalization: TextCapitalization.sentences,
                   ),
-                  maxLines: 2,
-                ),
-              ],
+                  const SizedBox(height: 12),
+                  // Caja de descripción grande (mínimo 6 líneas visibles)
+                  TextField(
+                    controller: descCtrl,
+                    decoration: const InputDecoration(
+                      labelText: 'Notas',
+                      border: OutlineInputBorder(),
+                      alignLabelWithHint: true,
+                    ),
+                    minLines: 6,
+                    maxLines: 12,
+                  ),
+
+                  // Compartir este menú suelto (solo si es mío)
+                  if (!isForeign) ...[
+                    const SizedBox(height: 16),
+                    const Divider(),
+                    Row(
+                      children: [
+                        const Icon(Icons.share_outlined, size: 18),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'Compartir solo este menú',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        TextButton.icon(
+                          icon: const Icon(Icons.person_add_alt, size: 18),
+                          label: const Text('Elegir'),
+                          onPressed: () async {
+                            final updated = await _pickFriendsForItem(
+                              friends: friends,
+                              alreadyShared: sharedUids,
+                              docId: entry.id,
+                            );
+                            if (updated != null) {
+                              setS(() => sharedUids = updated);
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    if (sharedUids.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 2, left: 4),
+                        child: Text(
+                          'No compartido individualmente',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                      )
+                    else
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: sharedUids.map((uid) {
+                          final f = friends.firstWhere(
+                            (fr) => fr.firebaseUid == uid,
+                            orElse: () => FriendModel(
+                              name: 'Amigo',
+                              email: '',
+                              firebaseUid: uid,
+                            ),
+                          );
+                          return Chip(
+                            label: Text(
+                              f.displayName,
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            onDeleted: () async {
+                              await WeeklyShareService.instance
+                                  .unshareSingleItem(
+                                    type: 'menus',
+                                    docId: entry.id,
+                                    friendUid: uid,
+                                  );
+                              setS(() => sharedUids.remove(uid));
+                            },
+                          );
+                        }).toList(),
+                      ),
+                  ],
+                ],
+              ),
             ),
           ),
           actions: [
@@ -558,18 +668,85 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         ),
       ),
     );
+    _loadWeek();
+  }
+
+  /// Selector de amigos para compartir un item concreto. Devuelve el nuevo set
+  /// de UIDs compartidos, o null si se canceló.
+  Future<Set<String>?> _pickFriendsForItem({
+    required List<FriendModel> friends,
+    required Set<String> alreadyShared,
+    required String docId,
+  }) async {
+    final valid = friends.where((f) => f.firebaseUid != null).toList();
+    if (valid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No tienes amigos para compartir')),
+      );
+      return null;
+    }
+    final selected = Set<String>.from(alreadyShared);
+
+    return showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          title: const Text('Compartir este menú'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView(
+              shrinkWrap: true,
+              children: valid.map((f) {
+                final uid = f.firebaseUid!;
+                final isSel = selected.contains(uid);
+                return CheckboxListTile(
+                  value: isSel,
+                  title: Text(f.displayName),
+                  subtitle: Text(f.email, style: const TextStyle(fontSize: 11)),
+                  secondary: Text(f.logo, style: const TextStyle(fontSize: 20)),
+                  onChanged: (v) async {
+                    if (v == true) {
+                      await WeeklyShareService.instance.shareSingleItem(
+                        type: 'menus',
+                        docId: docId,
+                        friendUid: uid,
+                      );
+                      setS(() => selected.add(uid));
+                    } else {
+                      await WeeklyShareService.instance.unshareSingleItem(
+                        type: 'menus',
+                        docId: docId,
+                        friendUid: uid,
+                      );
+                      setS(() => selected.remove(uid));
+                    }
+                  },
+                );
+              }).toList(),
+            ),
+          ),
+          actions: [
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: _primary),
+              onPressed: () => Navigator.pop(ctx, selected),
+              child: const Text('Listo', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ══════════════════════════════════════════════════════════════════════════
   // HELPERS
   // ══════════════════════════════════════════════════════════════════════════
 
-  String _weekLabelOf(DateTime monday) => _fmtWeekRange(monday);
-
   Color _mealTypeColor(String type) {
     switch (type) {
       case 'Desayuno':
         return const Color(0xFFFFA726);
+      case 'Media mañana':
+        return const Color(0xFFFFCA28);
       case 'Almuerzo':
         return const Color(0xFF42A5F5);
       case 'Merienda':
@@ -585,6 +762,8 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     switch (type) {
       case 'Desayuno':
         return Icons.free_breakfast;
+      case 'Media mañana':
+        return Icons.bakery_dining;
       case 'Almuerzo':
         return Icons.lunch_dining;
       case 'Merienda':
@@ -611,6 +790,11 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         title: const Text('Menú Semanal'),
         actions: [
           IconButton(
+            tooltip: 'Lista de la compra',
+            icon: const Icon(Icons.shopping_cart_outlined),
+            onPressed: _openShoppingList,
+          ),
+          IconButton(
             tooltip: 'Compartir',
             icon: const Icon(Icons.people_outline),
             onPressed: _openShareDialog,
@@ -626,6 +810,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         children: [
           _buildTopBar(),
           _buildActionButtons(),
+          if (_clipboard != null) _buildPasteBanner(),
           Expanded(
             child: _isLoading
                 ? const Center(child: CircularProgressIndicator())
@@ -703,6 +888,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   }
 
   Widget _buildActionButtons() {
+    final bool copying = _clipboard != null;
     return Container(
       color: _accent.withOpacity(0.15),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -719,10 +905,10 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
           const SizedBox(width: 8),
           Expanded(
             child: _ActionBtn(
-              icon: Icons.copy_all,
-              label: 'Asignar',
+              icon: copying ? Icons.content_paste : Icons.copy_all,
+              label: copying ? 'Pegar aquí' : 'Copiar',
               color: Colors.teal,
-              onTap: _showAssignDialog,
+              onTap: copying ? _pasteIntoCurrentWeek : _copyCurrentWeek,
             ),
           ),
           const SizedBox(width: 8),
@@ -733,6 +919,31 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
               color: Colors.redAccent,
               onTap: _showRemoveDialog,
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPasteBanner() {
+    return Container(
+      width: double.infinity,
+      color: Colors.teal.withOpacity(0.12),
+      padding: const EdgeInsets.fromLTRB(14, 8, 8, 8),
+      child: Row(
+        children: [
+          const Icon(Icons.content_copy, size: 18, color: Colors.teal),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Copiaste la semana del ${_fmtShort(_clipboardSourceMonday!)}. '
+              'Navega con las flechas y pulsa "Pegar aquí".',
+              style: const TextStyle(fontSize: 12, color: Colors.teal),
+            ),
+          ),
+          TextButton(
+            onPressed: _cancelCopy,
+            child: const Text('Cancelar', style: TextStyle(fontSize: 12)),
           ),
         ],
       ),
@@ -852,7 +1063,6 @@ class _DayCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header del día
           Container(
             decoration: BoxDecoration(
               color: isToday
@@ -899,7 +1109,6 @@ class _DayCard extends StatelessWidget {
               ],
             ),
           ),
-          // Entradas del día
           if (entries.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
@@ -922,63 +1131,74 @@ class _DayCard extends StatelessWidget {
               itemBuilder: (_, i) {
                 final e = entries[i];
                 final color = mealTypeColor(e.mealType);
+                final shared = e.isSharedFromOther(myUid);
                 return ListTile(
-                  dense: true,
+                  isThreeLine: e.description.isNotEmpty,
+                  titleAlignment: ListTileTitleAlignment.top,
                   contentPadding: const EdgeInsets.symmetric(
                     horizontal: 14,
-                    vertical: 2,
+                    vertical: 8,
                   ),
-                  leading: CircleAvatar(
-                    radius: 16,
-                    backgroundColor: color.withOpacity(0.15),
-                    child: Icon(
-                      mealTypeIcon(e.mealType),
-                      size: 16,
-                      color: color,
+                  // Avatar con badge de "compartido" en la esquina.
+                  leading: SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        CircleAvatar(
+                          radius: 16,
+                          backgroundColor: color.withOpacity(0.15),
+                          child: Icon(
+                            mealTypeIcon(e.mealType),
+                            size: 16,
+                            color: color,
+                          ),
+                        ),
+                        if (shared)
+                          Positioned(
+                            right: -2,
+                            bottom: -2,
+                            child: Container(
+                              padding: const EdgeInsets.all(2),
+                              decoration: BoxDecoration(
+                                color: Colors.teal,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 1.5,
+                                ),
+                              ),
+                              child: const Icon(
+                                Icons.people_alt,
+                                size: 9,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                  title: Row(
-                    children: [
-                      if (e.isSharedFromOther(myUid)) ...[
-                        Container(
-                          margin: const EdgeInsets.only(right: 6),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 5,
-                            vertical: 1,
-                          ),
-                          decoration: BoxDecoration(
-                            color: Colors.teal.withOpacity(0.12),
-                            borderRadius: BorderRadius.circular(6),
-                            border: Border.all(
-                              color: Colors.teal.withOpacity(0.4),
-                            ),
-                          ),
-                          child: Text(
-                            e.ownerName.isNotEmpty ? e.ownerName : 'Compartido',
-                            style: const TextStyle(
-                              fontSize: 9,
-                              color: Colors.teal,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                      Expanded(
-                        child: Text(
-                          e.title,
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w600,
-                            fontSize: 14,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
+                  title: Text(
+                    e.title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 14.5,
+                      height: 1.25,
+                    ),
+                    maxLines: 4,
+                    overflow: TextOverflow.ellipsis,
                   ),
+                  // Descripción: hasta 3 líneas visibles.
                   subtitle: e.description.isNotEmpty
-                      ? Text(
-                          e.description,
-                          style: const TextStyle(fontSize: 12),
+                      ? Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            e.description,
+                            style: const TextStyle(fontSize: 12),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         )
                       : null,
                   trailing: Container(

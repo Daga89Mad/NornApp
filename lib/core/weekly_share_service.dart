@@ -8,14 +8,13 @@
 //   · Cuando A comparte con B, todos los docs existentes de A se actualizan con B en shared_with
 //   · Los nuevos docs que guarda A también incluyen shared_with gracias al repositorio
 //   · B tiene un listener en tiempo real sobre docs donde shared_with contains B
+//   · Además se puede compartir UN SOLO item con un amigo (shareSingleItem).
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
 import '../models/friend_model.dart';
-import '../models/weekly_menu_model.dart';
-import '../models/weekly_task_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 
@@ -31,12 +30,14 @@ class WeeklyShareService {
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
   final List<StreamSubscription> _subscriptions = [];
 
+  String _colFor(String type) => type == 'menus' ? _menusCol : _tasksCol;
+  String _tableFor(String type) =>
+      type == 'menus' ? DBSchema.tableWeeklyMenus : DBSchema.tableWeeklyTasks;
+
   // ══════════════════════════════════════════════════════════════════════════
-  // COMPARTIR
+  // COMPARTIR (global: toda mi semana con un amigo)
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Comparte los tipos indicados (menus y/o tareas) con los amigos indicados.
-  /// [types] puede contener 'menus', 'tasks' o ambos.
   Future<void> shareWithFriends({
     required List<String> types,
     required List<FriendModel> friends,
@@ -49,7 +50,6 @@ class WeeklyShareService {
         .toList();
     if (friendUids.isEmpty) return;
 
-    // 1. Guardar configuración de compartir
     for (final fUid in friendUids) {
       await _db.collection(_sharesCol).doc('${_uid}_$fUid').set({
         'from_uid': _uid,
@@ -59,7 +59,6 @@ class WeeklyShareService {
       }, SetOptions(merge: true));
     }
 
-    // 2. Actualizar documentos existentes en Firebase
     if (types.contains('menus')) {
       await _addSharedWithToExisting(_menusCol, friendUids);
     }
@@ -70,7 +69,6 @@ class WeeklyShareService {
     debugPrint('📤 Weekly share: tipos=$types con ${friendUids.length} amigos');
   }
 
-  /// Deja de compartir con los amigos indicados (quita su UID de todos los docs).
   Future<void> unshareWithFriends({
     required List<String> types,
     required List<FriendModel> friends,
@@ -84,7 +82,6 @@ class WeeklyShareService {
     if (friendUids.isEmpty) return;
 
     for (final fUid in friendUids) {
-      // Actualizar o eliminar la configuración de compartir
       final docRef = _db.collection(_sharesCol).doc('${_uid}_$fUid');
       final snap = await docRef.get();
       if (!snap.exists) continue;
@@ -99,7 +96,6 @@ class WeeklyShareService {
       }
     }
 
-    // Quitar shared_with de los documentos existentes
     if (types.contains('menus')) {
       await _removeSharedWithFromExisting(_menusCol, friendUids);
     }
@@ -113,11 +109,89 @@ class WeeklyShareService {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
+  // COMPARTIR UN SOLO ITEM (menú o tarea concreta) CON UN AMIGO
+  // ══════════════════════════════════════════════════════════════════════════
+
+  /// Añade [friendUid] al shared_with de un único documento (menú o tarea)
+  /// tanto en Firebase como en local. No toca la configuración global.
+  Future<void> shareSingleItem({
+    required String type, // 'menus' | 'tasks'
+    required String docId,
+    required String friendUid,
+  }) async {
+    if (_uid.isEmpty || friendUid.isEmpty || docId.isEmpty) return;
+    try {
+      await _db.collection(_colFor(type)).doc(docId).set({
+        'shared_with': FieldValue.arrayUnion([friendUid]),
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('❌ shareSingleItem Firebase: $e');
+    }
+    await _mergeLocalSharedWith(type, docId, add: [friendUid]);
+    debugPrint('📤 Item $docId compartido con $friendUid');
+  }
+
+  /// Quita [friendUid] del shared_with de un único documento.
+  Future<void> unshareSingleItem({
+    required String type,
+    required String docId,
+    required String friendUid,
+  }) async {
+    if (_uid.isEmpty || friendUid.isEmpty || docId.isEmpty) return;
+    try {
+      await _db.collection(_colFor(type)).doc(docId).set({
+        'shared_with': FieldValue.arrayRemove([friendUid]),
+        'updated_at': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    } catch (e) {
+      debugPrint('❌ unshareSingleItem Firebase: $e');
+    }
+    await _mergeLocalSharedWith(type, docId, remove: [friendUid]);
+    debugPrint('🚫 Item $docId dejado de compartir con $friendUid');
+  }
+
+  /// Devuelve el set de UIDs con los que está compartido un item (según local).
+  Future<Set<String>> getSharedUidsForItem({
+    required String type,
+    required String docId,
+  }) async {
+    final rows = await DBProvider.db.query(
+      _tableFor(type),
+      where: 'id = ?',
+      whereArgs: [docId],
+      limit: '1',
+    );
+    if (rows.isEmpty) return {};
+    return parseUids(rows.first['shared_with'] as String? ?? '');
+  }
+
+  Future<void> _mergeLocalSharedWith(
+    String type,
+    String docId, {
+    List<String> add = const [],
+    List<String> remove = const [],
+  }) async {
+    final rows = await DBProvider.db.query(
+      _tableFor(type),
+      where: 'id = ?',
+      whereArgs: [docId],
+      limit: '1',
+    );
+    if (rows.isEmpty) return;
+    final row = Map<String, dynamic>.from(rows.first);
+    final set = parseUids(row['shared_with'] as String? ?? '');
+    set.addAll(add);
+    set.removeAll(remove);
+    row['shared_with'] = uidsToJson(set);
+    row['synced'] = 1;
+    await DBProvider.db.insertOrReplace(_tableFor(type), row);
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
   // CONSULTA DE CONFIGURACIÓN ACTUAL
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Obtiene la configuración de compartir actual del usuario.
-  /// Devuelve una lista de { 'friend': FriendModel, 'types': List<String> }
   Future<List<Map<String, dynamic>>> getCurrentShares(
     List<FriendModel> friends,
   ) async {
@@ -146,7 +220,6 @@ class WeeklyShareService {
     }
   }
 
-  /// Lista de UIDs de amigos con los que comparto un tipo concreto.
   Future<List<String>> getSharedUidsForType(String type) async {
     if (_uid.isEmpty) return [];
     try {
@@ -221,6 +294,8 @@ class WeeklyShareService {
           'owner_id': data['owner_id'] ?? '',
           'owner_name': data['owner_name'] ?? '',
           'shared_with': _listToJson(data['shared_with']),
+          'recurrence': data['recurrence'] ?? 'none',
+          'parent_id': data['parent_id'] ?? '',
           'synced': 1,
         };
       }).toList();
@@ -278,6 +353,46 @@ class WeeklyShareService {
           if (changed) onChanged?.call();
         }, onError: (e) => debugPrint('❌ Listener weekly_menus: $e'));
 
+    // ── Menús PROPIOS (para reflejar shared_with actualizado en local) ────────
+    final subOwnMenus = _db
+        .collection(_menusCol)
+        .where('owner_id', isEqualTo: _uid)
+        .snapshots()
+        .listen((snap) async {
+          bool changed = false;
+          for (final change in snap.docChanges) {
+            final data = change.doc.data();
+            if (data == null) continue;
+            switch (change.type) {
+              case DocumentChangeType.added:
+              case DocumentChangeType.modified:
+                await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyMenus, {
+                  'id': change.doc.id,
+                  'date':
+                      (data['date'] as Timestamp?)?.millisecondsSinceEpoch ?? 0,
+                  'meal_type': data['meal_type'] ?? 'Comida',
+                  'title': data['title'] ?? '',
+                  'description': data['description'] ?? '',
+                  'owner_id': data['owner_id'] ?? _uid,
+                  'owner_name': data['owner_name'] ?? '',
+                  'shared_with': _listToJson(data['shared_with']),
+                  'synced': 1,
+                });
+                changed = true;
+                break;
+              case DocumentChangeType.removed:
+                await DBProvider.db.delete(
+                  DBSchema.tableWeeklyMenus,
+                  where: 'id = ?',
+                  whereArgs: [change.doc.id],
+                );
+                changed = true;
+                break;
+            }
+          }
+          if (changed) onChanged?.call();
+        }, onError: (e) => debugPrint('❌ Listener own weekly_menus: $e'));
+
     // ── Tareas compartidas CONMIGO (yo soy el destinatario) ───────────────────
     final subTasks = _db
         .collection(_tasksCol)
@@ -301,6 +416,8 @@ class WeeklyShareService {
                   'owner_id': data['owner_id'] ?? '',
                   'owner_name': data['owner_name'] ?? '',
                   'shared_with': _listToJson(data['shared_with']),
+                  'recurrence': data['recurrence'] ?? 'none',
+                  'parent_id': data['parent_id'] ?? '',
                   'synced': 1,
                 });
                 changed = true;
@@ -319,9 +436,6 @@ class WeeklyShareService {
         }, onError: (e) => debugPrint('❌ Listener weekly_tasks: $e'));
 
     // ── Tareas PROPIAS (yo soy el dueño) ──────────────────────────────────────
-    // Detecta cambios que hace el destinatario sobre MIS tareas (p. ej. marca
-    // is_done). Sin este listener, cuando el otro completa una tarea mía, yo
-    // nunca me entero porque mi uid no está en su shared_with.
     final subOwnTasks = _db
         .collection(_tasksCol)
         .where('owner_id', isEqualTo: _uid)
@@ -344,6 +458,8 @@ class WeeklyShareService {
                   'owner_id': data['owner_id'] ?? _uid,
                   'owner_name': data['owner_name'] ?? '',
                   'shared_with': _listToJson(data['shared_with']),
+                  'recurrence': data['recurrence'] ?? 'none',
+                  'parent_id': data['parent_id'] ?? '',
                   'synced': 1,
                 });
                 changed = true;
@@ -361,7 +477,7 @@ class WeeklyShareService {
           if (changed) onChanged?.call();
         }, onError: (e) => debugPrint('❌ Listener own weekly_tasks: $e'));
 
-    _subscriptions.addAll([subMenus, subTasks, subOwnTasks]);
+    _subscriptions.addAll([subMenus, subOwnMenus, subTasks, subOwnTasks]);
     debugPrint('👂 WeeklyShare listeners activos');
   }
 
@@ -431,5 +547,21 @@ class WeeklyShareService {
     final list = raw as List<dynamic>;
     if (list.isEmpty) return '';
     return '[${list.map((e) => '"$e"').join(',')}]';
+  }
+
+  // ── Utilidades públicas de parseo de shared_with (usadas por los repos) ─────
+
+  /// Parsea un shared_with local ('["a","b"]') a un Set<String>.
+  static Set<String> parseUids(String json) {
+    if (json.isEmpty) return <String>{};
+    final matches = RegExp(r'"([^"]+)"').allMatches(json);
+    return matches.map((m) => m.group(1)!).toSet();
+  }
+
+  /// Serializa un conjunto de UIDs al formato local JSON.
+  static String uidsToJson(Iterable<String> uids) {
+    final list = uids.where((u) => u.isNotEmpty).toSet().toList();
+    if (list.isEmpty) return '';
+    return '[${list.map((u) => '"$u"').join(',')}]';
   }
 }

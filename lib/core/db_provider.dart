@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 16
+  static const int _dbVersion = DBSchema.version; // 19
   Database? _database;
 
   Future<Database> get database async {
@@ -44,6 +44,13 @@ class DBProvider {
         "ADD COLUMN recurrence TEXT NOT NULL DEFAULT 'none'",
       );
       debugPrint('🛠️ Columna recurrence añadida (red de seguridad)');
+    }
+    if (!names.contains('parent_id')) {
+      await db.execute(
+        "ALTER TABLE ${DBSchema.tableWeeklyTasks} "
+        "ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
+      );
+      debugPrint('🛠️ Columna parent_id añadida (red de seguridad)');
     }
   }
 
@@ -183,6 +190,14 @@ class DBProvider {
         case 18:
           await db.execute(DBSchema.createCalendarCategories);
           debugPrint('Migración v18: tabla calendar_categories creada');
+          break;
+        // ── v19: subtareas (parent_id) en weekly_tasks ─────────────────────
+        case 19:
+          await db.execute(
+            "ALTER TABLE ${DBSchema.tableWeeklyTasks} "
+            "ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
+          );
+          debugPrint('Migración v19: parent_id en weekly_tasks (subtareas)');
           break;
       }
     }
