@@ -26,13 +26,32 @@ class WeeklyShareService {
   static const String _sharesCol = 'weekly_shares';
   static const String _menusCol = 'weekly_menus';
   static const String _tasksCol = 'weekly_tasks';
+  static const String _trainingsCol = 'weekly_trainings';
 
   String get _uid => FirebaseAuth.instance.currentUser?.uid ?? '';
   final List<StreamSubscription> _subscriptions = [];
 
-  String _colFor(String type) => type == 'menus' ? _menusCol : _tasksCol;
-  String _tableFor(String type) =>
-      type == 'menus' ? DBSchema.tableWeeklyMenus : DBSchema.tableWeeklyTasks;
+  String _colFor(String type) {
+    switch (type) {
+      case 'menus':
+        return _menusCol;
+      case 'trainings':
+        return _trainingsCol;
+      default:
+        return _tasksCol;
+    }
+  }
+
+  String _tableFor(String type) {
+    switch (type) {
+      case 'menus':
+        return DBSchema.tableWeeklyMenus;
+      case 'trainings':
+        return DBSchema.tableWeeklyTrainings;
+      default:
+        return DBSchema.tableWeeklyTasks;
+    }
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // COMPARTIR (global: toda mi semana con un amigo)
@@ -64,6 +83,9 @@ class WeeklyShareService {
     }
     if (types.contains('tasks')) {
       await _addSharedWithToExisting(_tasksCol, friendUids);
+    }
+    if (types.contains('trainings')) {
+      await _addSharedWithToExisting(_trainingsCol, friendUids);
     }
 
     debugPrint('📤 Weekly share: tipos=$types con ${friendUids.length} amigos');
@@ -101,6 +123,9 @@ class WeeklyShareService {
     }
     if (types.contains('tasks')) {
       await _removeSharedWithFromExisting(_tasksCol, friendUids);
+    }
+    if (types.contains('trainings')) {
+      await _removeSharedWithFromExisting(_trainingsCol, friendUids);
     }
 
     debugPrint(

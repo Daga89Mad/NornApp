@@ -21,6 +21,7 @@ class ShareWeeklyDialog extends StatefulWidget {
 class _ShareWeeklyDialogState extends State<ShareWeeklyDialog> {
   static const _menuType = 'menus';
   static const _taskType = 'tasks';
+  static const _trainingType = 'trainings';
 
   static const _typeOptions = [
     _TypeOption(
@@ -28,6 +29,12 @@ class _ShareWeeklyDialogState extends State<ShareWeeklyDialog> {
       label: 'Menú semanal',
       icon: Icons.restaurant_menu,
       color: Color(0xFF5C6BC0),
+    ),
+    _TypeOption(
+      key: _trainingType,
+      label: 'Entrenamiento',
+      icon: Icons.fitness_center,
+      color: Color(0xFFEF6C00),
     ),
     _TypeOption(
       key: _taskType,
@@ -53,7 +60,7 @@ class _ShareWeeklyDialogState extends State<ShareWeeklyDialog> {
     super.initState();
     _selectedTypes = widget.initialType != null
         ? {widget.initialType!}
-        : {_menuType, _taskType};
+        : {_menuType, _trainingType, _taskType};
     _loadFriends();
   }
 
@@ -154,7 +161,18 @@ class _ShareWeeklyDialogState extends State<ShareWeeklyDialog> {
 
   String _typesLabel(List<String> types) {
     if (types.isEmpty) return '';
-    return types.map((t) => t == _menuType ? 'Menú' : 'Tareas').join(' y ');
+    return types
+        .map((t) {
+          switch (t) {
+            case _menuType:
+              return 'Menú';
+            case _trainingType:
+              return 'Entrenamiento';
+            default:
+              return 'Tareas';
+          }
+        })
+        .join(' y ');
   }
 
   // ══════════════════════════════════════════════════════════════════════════

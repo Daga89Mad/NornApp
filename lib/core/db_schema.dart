@@ -1,6 +1,7 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 19; // ← v19: parent_id en weekly_tasks (subtareas)
+  static const int version =
+      20; // ← v20: tabla weekly_trainings (Entrenamiento)
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -14,6 +15,7 @@ class DBSchema {
   static const String tableFriends = 'friends';
   static const String tableWeeklyMenus = 'weekly_menus';
   static const String tableWeeklyTasks = 'weekly_tasks';
+  static const String tableWeeklyTrainings = 'weekly_trainings'; // ← NUEVO
 
   static const String createUsers =
       """CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, last_sync INTEGER)""";
@@ -111,6 +113,25 @@ class DBSchema {
       synced INTEGER NOT NULL DEFAULT 0
     )
   """;
+
+  // ── NUEVO: Entrenamiento semanal ─────────────────────────────────────────
+  // Misma estructura que weekly_menus (training_type ≈ meal_type) + is_done
+  // como en weekly_tasks, para poder marcar completado y calcular el %.
+  static const String createWeeklyTrainings = """
+    CREATE TABLE weekly_trainings (
+      id TEXT PRIMARY KEY,
+      date INTEGER NOT NULL,
+      training_type TEXT NOT NULL DEFAULT 'Otro',
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      is_done INTEGER NOT NULL DEFAULT 0,
+      owner_id TEXT NOT NULL DEFAULT '',
+      owner_name TEXT NOT NULL DEFAULT '',
+      shared_with TEXT NOT NULL DEFAULT '',
+      synced INTEGER NOT NULL DEFAULT 0
+    )
+  """;
+
   static const String tableCalendarCategories =
       'calendar_categories'; // ← NUEVO
 

@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 19
+  static const int _dbVersion = DBSchema.version; // 20
   Database? _database;
 
   Future<Database> get database async {
@@ -30,6 +30,7 @@ class DBProvider {
       onUpgrade: _onUpgrade,
     );
     await _ensureWeeklyTasksColumns(db); // ← red de seguridad idempotente
+    await _ensureWeeklyTrainingsTable(db); // ← red de seguridad idempotente
     return db;
   }
 
@@ -54,6 +55,19 @@ class DBProvider {
     }
   }
 
+  /// Crea la tabla weekly_trainings si por algún motivo no existiese
+  /// (instalaciones antiguas que ya estaban en versión ≥20 sin la tabla).
+  Future<void> _ensureWeeklyTrainingsTable(Database db) async {
+    final res = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      [DBSchema.tableWeeklyTrainings],
+    );
+    if (res.isEmpty) {
+      await db.execute(DBSchema.createWeeklyTrainings);
+      debugPrint('🛠️ Tabla weekly_trainings creada (red de seguridad)');
+    }
+  }
+
   FutureOr<void> _onCreate(Database db, int version) async {
     await db.execute(DBSchema.createUsers);
     await db.execute(DBSchema.createEvents);
@@ -67,7 +81,8 @@ class DBProvider {
     await db.execute(DBSchema.createFriends);
     await db.execute(DBSchema.createWeeklyMenus);
     await db.execute(DBSchema.createWeeklyTasks);
-    await db.execute(DBSchema.createCalendarCategories); // ← NUEVO
+    await db.execute(DBSchema.createCalendarCategories);
+    await db.execute(DBSchema.createWeeklyTrainings); // ← NUEVO
   }
 
   FutureOr<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -198,6 +213,11 @@ class DBProvider {
             "ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
           );
           debugPrint('Migración v19: parent_id en weekly_tasks (subtareas)');
+          break;
+        // ── v20: tabla weekly_trainings (Entrenamiento semanal) ────────────
+        case 20:
+          await db.execute(DBSchema.createWeeklyTrainings);
+          debugPrint('Migración v20: tabla weekly_trainings creada');
           break;
       }
     }
