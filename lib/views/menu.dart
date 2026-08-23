@@ -16,6 +16,7 @@ import 'package:nornapp/views/friends_screen.dart';
 import 'package:nornapp/views/qr_share_screen.dart';
 import 'package:nornapp/views/diary_screen.dart';
 import 'package:nornapp/views/weekly_menu_screen.dart';
+import 'package:nornapp/views/weekly_training_screen.dart';
 import 'package:nornapp/views/weekly_tasks_screen.dart';
 import 'dart:math' as math;
 import '../core/settings_repository.dart';
@@ -30,7 +31,6 @@ class MenuScreen extends StatefulWidget {
 }
 
 class _MenuScreenState extends State<MenuScreen> {
-  final TextEditingController _searchController = TextEditingController();
   MenuStyle _style = MenuStyle.modern;
 
   // Palette management
@@ -90,7 +90,6 @@ class _MenuScreenState extends State<MenuScreen> {
   void initState() {
     super.initState();
     _loadSettings();
-    _searchController.addListener(() => setState(() {}));
   }
 
   Future<void> _loadSettings() async {
@@ -107,7 +106,6 @@ class _MenuScreenState extends State<MenuScreen> {
 
   @override
   void dispose() {
-    _searchController.dispose();
     super.dispose();
   }
 
@@ -129,6 +127,12 @@ class _MenuScreenState extends State<MenuScreen> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const WeeklyMenuScreen()));
+  }
+
+  void _openWeeklyTraining() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const WeeklyTrainingScreen()));
   }
 
   void _openWeeklyTasks() {
@@ -174,6 +178,11 @@ class _MenuScreenState extends State<MenuScreen> {
       onTap: _openWeeklyMenu,
     ),
     _MenuItemData(
+      icon: Icons.fitness_center,
+      label: 'Entrenamiento',
+      onTap: _openWeeklyTraining,
+    ),
+    _MenuItemData(
       icon: Icons.checklist_rtl,
       label: 'Tareas semanales',
       onTap: _openWeeklyTasks,
@@ -210,6 +219,8 @@ class _MenuScreenState extends State<MenuScreen> {
         return palette.primary;
       case 'Menú semanal':
         return palette.primary.withOpacity(0.92);
+      case 'Entrenamiento':
+        return palette.primary.withOpacity(0.88);
       case 'Tareas semanales':
         return palette.primary.withOpacity(0.85);
       case 'Turnos':
@@ -281,14 +292,6 @@ class _MenuScreenState extends State<MenuScreen> {
       }
     }
 
-    // Filtro de búsqueda
-    final query = _searchController.text.trim().toLowerCase();
-    final filtered = query.isEmpty
-        ? _menuItems
-        : _menuItems
-              .where((m) => m.label.toLowerCase().contains(query))
-              .toList();
-
     return Scaffold(
       backgroundColor: palette.background,
       appBar: AppBar(
@@ -331,18 +334,17 @@ class _MenuScreenState extends State<MenuScreen> {
               _ProfileHeader(
                 onEditProfile: () {},
                 onQuickCalendar: _openCalendar,
-                searchController: _searchController,
-                palette: palette,
-              ),
-              const SizedBox(height: 12),
-              _ModernSearchField(
-                controller: _searchController,
-                hint: 'Buscar opción…',
                 palette: palette,
               ),
               const SizedBox(height: 16),
               Expanded(
-                child: _buildGrid(filtered, crossAxis, spacing, palette, theme),
+                child: _buildGrid(
+                  _menuItems,
+                  crossAxis,
+                  spacing,
+                  palette,
+                  theme,
+                ),
               ),
             ],
           ),
@@ -860,13 +862,11 @@ class _PaletteButton extends StatelessWidget {
 class _ProfileHeader extends StatelessWidget {
   final VoidCallback onEditProfile;
   final VoidCallback onQuickCalendar;
-  final TextEditingController searchController;
   final _Palette palette;
 
   const _ProfileHeader({
     required this.onEditProfile,
     required this.onQuickCalendar,
-    required this.searchController,
     required this.palette,
     Key? key,
   }) : super(key: key);
@@ -929,61 +929,6 @@ class _ProfileHeader extends StatelessWidget {
           ],
         ),
       ],
-    );
-  }
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// SEARCH FIELD
-// ════════════════════════════════════════════════════════════════════════════
-
-class _ModernSearchField extends StatelessWidget {
-  final TextEditingController controller;
-  final String hint;
-  final _Palette palette;
-
-  const _ModernSearchField({
-    required this.controller,
-    required this.hint,
-    required this.palette,
-    Key? key,
-  }) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(12),
-      borderSide: BorderSide.none,
-    );
-    final bg = palette.background == Colors.white
-        ? Colors.grey.shade100
-        : palette.background;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: TextField(
-        controller: controller,
-        textInputAction: TextInputAction.search,
-        decoration: InputDecoration(
-          hintText: hint,
-          prefixIcon: Icon(Icons.search, color: palette.text),
-          suffixIcon: controller.text.isNotEmpty
-              ? IconButton(
-                  icon: Icon(Icons.clear, color: palette.text),
-                  onPressed: () => controller.clear(),
-                )
-              : null,
-          filled: true,
-          fillColor: Colors.transparent,
-          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-          border: border,
-          enabledBorder: border,
-          focusedBorder: border,
-        ),
-      ),
     );
   }
 }
