@@ -1,7 +1,7 @@
 // lib/core/db_schema.dart
 class DBSchema {
   static const int version =
-      20; // ← v20: tabla weekly_trainings (Entrenamiento)
+      21; // ← v21: esquema fun-content corregido + dismissed_shared
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -15,7 +15,8 @@ class DBSchema {
   static const String tableFriends = 'friends';
   static const String tableWeeklyMenus = 'weekly_menus';
   static const String tableWeeklyTasks = 'weekly_tasks';
-  static const String tableWeeklyTrainings = 'weekly_trainings'; // ← NUEVO
+  static const String tableWeeklyTrainings = 'weekly_trainings';
+  static const String tableDismissedShared = 'dismissed_shared'; // ← NUEVO
 
   static const String createUsers =
       """CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, last_sync INTEGER)""";
@@ -63,14 +64,36 @@ class DBSchema {
   static const String createJokes =
       """CREATE TABLE jokes (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
 
-  static const String createPhrases =
-      """CREATE TABLE phrases (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
+  // ── CORREGIDO: incluye columna author ──────────────────────────────────────
+  static const String createPhrases = """
+    CREATE TABLE phrases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      text TEXT NOT NULL,
+      author TEXT NOT NULL DEFAULT ''
+    )
+  """;
 
-  static const String createLanguageWords =
-      """CREATE TABLE language_words (id INTEGER PRIMARY KEY AUTOINCREMENT, word TEXT NOT NULL, translation TEXT NOT NULL, language TEXT NOT NULL)""";
+  // ── CORREGIDO: columnas reales de idioms (phrase/pronunciation/meaning/...) ─
+  static const String createLanguageWords = """
+    CREATE TABLE language_words (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      language TEXT NOT NULL,
+      phrase TEXT NOT NULL,
+      pronunciation TEXT NOT NULL DEFAULT '',
+      meaning TEXT NOT NULL,
+      example TEXT NOT NULL DEFAULT '',
+      example_pronunciation TEXT NOT NULL DEFAULT ''
+    )
+  """;
 
-  static const String createFacts =
-      """CREATE TABLE interesting_facts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)""";
+  // ── CORREGIDO: incluye columna category ────────────────────────────────────
+  static const String createFacts = """
+    CREATE TABLE interesting_facts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      text TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT ''
+    )
+  """;
 
   static const String createFriends = """
     CREATE TABLE friends (
@@ -114,9 +137,7 @@ class DBSchema {
     )
   """;
 
-  // ── NUEVO: Entrenamiento semanal ─────────────────────────────────────────
-  // Misma estructura que weekly_menus (training_type ≈ meal_type) + is_done
-  // como en weekly_tasks, para poder marcar completado y calcular el %.
+  // ── Entrenamiento semanal ────────────────────────────────────────────────
   static const String createWeeklyTrainings = """
     CREATE TABLE weekly_trainings (
       id TEXT PRIMARY KEY,
@@ -143,6 +164,17 @@ class DBSchema {
       icon TEXT NOT NULL DEFAULT '🏷️',
       owner_id TEXT,
       synced INTEGER NOT NULL DEFAULT 0
+    )
+  """;
+
+  // ── NUEVO: items compartidos que el usuario ha ocultado ("quitar") ──────────
+  // No se borran para el dueño; solo se ocultan en mi vista. Si el dueño deja
+  // de compartírmelos y vuelve a hacerlo, reaparecen (ver DismissedSharedService).
+  static const String createDismissedShared = """
+    CREATE TABLE dismissed_shared (
+      item_id TEXT NOT NULL,
+      item_type TEXT NOT NULL,
+      PRIMARY KEY (item_id, item_type)
     )
   """;
 }

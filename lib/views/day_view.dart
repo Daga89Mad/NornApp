@@ -13,7 +13,6 @@ import '../models/friend_model.dart';
 import '../core/friend_repository.dart';
 import 'checklist_detail_page.dart';
 import '../core/fun_content_repository.dart';
-import 'fun_day_sheet.dart';
 import '../models/calendar_category.dart';
 import '../core/category_repository.dart';
 
@@ -130,17 +129,6 @@ class _DayViewState extends State<DayView> {
         curve: Curves.easeOut,
       );
     });
-  }
-
-  // ── Fun day sheet ──────────────────────────────────────────────────────────
-
-  void _openFunSheet() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const FunDaySheet(),
-    );
   }
 
   double _timeOfDayToTop(TimeOfDay t) =>
@@ -591,18 +579,6 @@ class _DayViewState extends State<DayView> {
                                 fontSize: 18,
                                 fontWeight: FontWeight.w600,
                               ),
-                        ),
-                      ),
-                      // Botón 😄 fun
-                      Tooltip(
-                        message: '¿Qué quieres hoy?',
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(20),
-                          onTap: _openFunSheet,
-                          child: const Padding(
-                            padding: EdgeInsets.all(6),
-                            child: Text('😄', style: TextStyle(fontSize: 22)),
-                          ),
                         ),
                       ),
                       // Botón compartir (placeholder)

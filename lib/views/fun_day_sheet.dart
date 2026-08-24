@@ -19,6 +19,15 @@ class _FunDaySheetState extends State<FunDaySheet> {
   String _selectedLanguage = '🇬🇧 Inglés'; // idioma por defecto
   FactItem? _fact;
 
+  @override
+  void initState() {
+    super.initState();
+    // Aseguramos el contenido aunque el sheet se abra desde el menú.
+    FunContentRepository.instance.seedIfEmpty().catchError(
+      (e) => debugPrint('⚠️ seedIfEmpty (FunDaySheet): $e'),
+    );
+  }
+
   // ── Loaders ────────────────────────────────────────────────────────────────
 
   Future<void> _loadJoke() async {

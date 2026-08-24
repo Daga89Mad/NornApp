@@ -7,6 +7,7 @@ import '../models/weekly_task_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
+import 'dismissed_shared_service.dart';
 
 class WeeklyTaskRepository {
   WeeklyTaskRepository._();
@@ -32,6 +33,8 @@ class WeeklyTaskRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
+    final dismissed = await DismissedSharedService.instance.idsForType('tasks');
+
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ?',
@@ -41,19 +44,27 @@ class WeeklyTaskRepository {
 
     return rows
         .map(WeeklyTask.fromMap)
-        .where((t) => t.ownerId == _uid || _isSharedWithMe(t.sharedWith))
+        .where(
+          (t) =>
+              (t.ownerId == _uid || _isSharedWithMe(t.sharedWith)) &&
+              !dismissed.contains(t.id),
+        )
         .toList();
   }
 
   /// Subtareas de una tarea concreta.
   Future<List<WeeklyTask>> getSubtasks(String parentId) async {
+    final dismissed = await DismissedSharedService.instance.idsForType('tasks');
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'parent_id = ?',
       whereArgs: [parentId],
       orderBy: 'title ASC',
     );
-    return rows.map(WeeklyTask.fromMap).toList();
+    return rows
+        .map(WeeklyTask.fromMap)
+        .where((t) => !dismissed.contains(t.id))
+        .toList();
   }
 
   bool _isSharedWithMe(String sharedWith) {
@@ -172,13 +183,36 @@ class WeeklyTaskRepository {
   }
 
   /// Borra una tarea y, si es principal, también sus subtareas.
+  /// Si la tarea es compartida por otro, solo se OCULTA (no se toca Firebase).
   Future<void> delete(String id) async {
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    final ownerId = rows.isEmpty
+        ? ''
+        : (rows.first['owner_id'] as String? ?? '');
+    final bool isShared = ownerId.isNotEmpty && ownerId != _uid;
+
     // Subtareas asociadas
     final subs = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'parent_id = ?',
       whereArgs: [id],
     );
+
+    if (isShared) {
+      await DismissedSharedService.instance.dismiss(id, 'tasks');
+      for (final s in subs) {
+        await DismissedSharedService.instance.dismiss(
+          s['id'] as String,
+          'tasks',
+        );
+      }
+    }
+
     for (final s in subs) {
       final sid = s['id'] as String;
       await DBProvider.db.delete(
@@ -186,14 +220,14 @@ class WeeklyTaskRepository {
         where: 'id = ?',
         whereArgs: [sid],
       );
-      _deleteFromFirebase(sid);
+      if (!isShared) _deleteFromFirebase(sid);
     }
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTasks,
       where: 'id = ?',
       whereArgs: [id],
     );
-    _deleteFromFirebase(id);
+    if (!isShared) _deleteFromFirebase(id);
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
@@ -202,7 +236,7 @@ class WeeklyTaskRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -220,7 +254,12 @@ class WeeklyTaskRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    await _dismissSharedInRange(
+      monday.millisecondsSinceEpoch,
+      sunday.millisecondsSinceEpoch,
+    );
   }
 
   Future<void> deleteDay(DateTime day) async {
@@ -229,7 +268,7 @@ class WeeklyTaskRepository {
       const Duration(hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -247,7 +286,34 @@ class WeeklyTaskRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    await _dismissSharedInRange(
+      midnight.millisecondsSinceEpoch,
+      endOfDay.millisecondsSinceEpoch,
+    );
+  }
+
+  /// Oculta (no borra) las tareas compartidas por otros dentro del rango.
+  Future<void> _dismissSharedInRange(int fromMs, int toMs) async {
+    final shared = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'date >= ? AND date <= ? AND owner_id != ? AND owner_id != ?',
+      whereArgs: [fromMs, toMs, _uid, ''],
+    );
+    final ids = shared
+        .map((r) => r['id'] as String)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (ids.isEmpty) return;
+    await DismissedSharedService.instance.dismissAll(ids, 'tasks');
+    for (final id in ids) {
+      await DBProvider.db.delete(
+        DBSchema.tableWeeklyTasks,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════

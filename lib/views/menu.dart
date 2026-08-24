@@ -15,6 +15,7 @@ import 'package:nornapp/views/shifts_screen.dart';
 import 'package:nornapp/views/friends_screen.dart';
 import 'package:nornapp/views/qr_share_screen.dart';
 import 'package:nornapp/views/diary_screen.dart';
+import 'package:nornapp/views/fun_day_sheet.dart';
 import 'package:nornapp/views/weekly_menu_screen.dart';
 import 'package:nornapp/views/weekly_training_screen.dart';
 import 'package:nornapp/views/weekly_tasks_screen.dart';
@@ -163,6 +164,15 @@ class _MenuScreenState extends State<MenuScreen> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const DiaryScreen()));
+  }
+
+  void _openFunSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => const FunDaySheet(),
+    );
   }
 
   // Menu items — Menú semanal y Tareas semanales después de Calendario
@@ -334,6 +344,7 @@ class _MenuScreenState extends State<MenuScreen> {
               _ProfileHeader(
                 onEditProfile: () {},
                 onQuickCalendar: _openCalendar,
+                onOpenFun: _openFunSheet, // ← NUEVO
                 palette: palette,
               ),
               const SizedBox(height: 16),
@@ -862,11 +873,13 @@ class _PaletteButton extends StatelessWidget {
 class _ProfileHeader extends StatelessWidget {
   final VoidCallback onEditProfile;
   final VoidCallback onQuickCalendar;
+  final VoidCallback onOpenFun; // ← NUEVO
   final _Palette palette;
 
   const _ProfileHeader({
     required this.onEditProfile,
     required this.onQuickCalendar,
+    required this.onOpenFun,
     required this.palette,
     Key? key,
   }) : super(key: key);
@@ -921,6 +934,12 @@ class _ProfileHeader extends StatelessWidget {
         Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            // ── NUEVO: botón carita (chiste/frase/idioma/dato) ──────────────
+            IconButton(
+              tooltip: '¿Qué quieres hoy?',
+              icon: const Text('😄', style: TextStyle(fontSize: 22)),
+              onPressed: onOpenFun,
+            ),
             IconButton(
               tooltip: 'Editar perfil',
               icon: Icon(Icons.edit, color: palette.text),

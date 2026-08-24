@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 20
+  static const int _dbVersion = DBSchema.version; // 21
   Database? _database;
 
   Future<Database> get database async {
@@ -31,6 +31,8 @@ class DBProvider {
     );
     await _ensureWeeklyTasksColumns(db); // ← red de seguridad idempotente
     await _ensureWeeklyTrainingsTable(db); // ← red de seguridad idempotente
+    await _ensureFunContentSchema(db); // ← red de seguridad idempotente
+    await _ensureDismissedSharedTable(db); // ← red de seguridad idempotente
     return db;
   }
 
@@ -68,6 +70,48 @@ class DBProvider {
     }
   }
 
+  /// Si las tablas de contenido diario tienen el esquema antiguo (sin las
+  /// columnas author/category/phrase...), las recrea vacías para que el seed
+  /// (FunContentRepository.seedIfEmpty) las vuelva a poblar correctamente.
+  Future<void> _ensureFunContentSchema(Database db) async {
+    Future<Set<String>> colsOf(String table) async {
+      final cols = await db.rawQuery('PRAGMA table_info($table)');
+      return cols.map((c) => c['name'] as String).toSet();
+    }
+
+    final phraseCols = await colsOf(DBSchema.tablePhrases);
+    if (!phraseCols.contains('author')) {
+      await db.execute('DROP TABLE IF EXISTS ${DBSchema.tablePhrases}');
+      await db.execute(DBSchema.createPhrases);
+      debugPrint('🛠️ Tabla phrases recreada (faltaba author)');
+    }
+
+    final langCols = await colsOf(DBSchema.tableLanguageWords);
+    if (!langCols.contains('phrase') || !langCols.contains('meaning')) {
+      await db.execute('DROP TABLE IF EXISTS ${DBSchema.tableLanguageWords}');
+      await db.execute(DBSchema.createLanguageWords);
+      debugPrint('🛠️ Tabla language_words recreada (esquema antiguo)');
+    }
+
+    final factCols = await colsOf(DBSchema.tableFacts);
+    if (!factCols.contains('category')) {
+      await db.execute('DROP TABLE IF EXISTS ${DBSchema.tableFacts}');
+      await db.execute(DBSchema.createFacts);
+      debugPrint('🛠️ Tabla interesting_facts recreada (faltaba category)');
+    }
+  }
+
+  Future<void> _ensureDismissedSharedTable(Database db) async {
+    final res = await db.rawQuery(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+      [DBSchema.tableDismissedShared],
+    );
+    if (res.isEmpty) {
+      await db.execute(DBSchema.createDismissedShared);
+      debugPrint('🛠️ Tabla dismissed_shared creada (red de seguridad)');
+    }
+  }
+
   FutureOr<void> _onCreate(Database db, int version) async {
     await db.execute(DBSchema.createUsers);
     await db.execute(DBSchema.createEvents);
@@ -82,7 +126,8 @@ class DBProvider {
     await db.execute(DBSchema.createWeeklyMenus);
     await db.execute(DBSchema.createWeeklyTasks);
     await db.execute(DBSchema.createCalendarCategories);
-    await db.execute(DBSchema.createWeeklyTrainings); // ← NUEVO
+    await db.execute(DBSchema.createWeeklyTrainings);
+    await db.execute(DBSchema.createDismissedShared); // ← NUEVO
   }
 
   FutureOr<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -218,6 +263,24 @@ class DBProvider {
         case 20:
           await db.execute(DBSchema.createWeeklyTrainings);
           debugPrint('Migración v20: tabla weekly_trainings creada');
+          break;
+        // ── v21: corrige esquema fun-content + tabla dismissed_shared ────────
+        case 21:
+          // Las tablas antiguas no tenían las columnas que usa el repositorio,
+          // por eso salía "sin frases/datos disponibles". Se recrean vacías y
+          // FunContentRepository.seedIfEmpty las repuebla en el próximo arranque.
+          await db.execute('DROP TABLE IF EXISTS ${DBSchema.tablePhrases}');
+          await db.execute(
+            'DROP TABLE IF EXISTS ${DBSchema.tableLanguageWords}',
+          );
+          await db.execute('DROP TABLE IF EXISTS ${DBSchema.tableFacts}');
+          await db.execute(DBSchema.createPhrases);
+          await db.execute(DBSchema.createLanguageWords);
+          await db.execute(DBSchema.createFacts);
+          await db.execute(DBSchema.createDismissedShared);
+          debugPrint(
+            'Migración v21: fun-content corregido + dismissed_shared creada',
+          );
           break;
       }
     }

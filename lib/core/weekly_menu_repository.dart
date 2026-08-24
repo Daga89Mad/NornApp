@@ -7,6 +7,7 @@ import '../models/weekly_menu_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
+import 'dismissed_shared_service.dart';
 
 class WeeklyMenuRepository {
   WeeklyMenuRepository._();
@@ -31,6 +32,8 @@ class WeeklyMenuRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
+    final dismissed = await DismissedSharedService.instance.idsForType('menus');
+
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
@@ -44,7 +47,11 @@ class WeeklyMenuRepository {
 
     return rows
         .map(WeeklyMenuEntry.fromMap)
-        .where((e) => e.ownerId == _uid || _isSharedWithMe(e.sharedWith))
+        .where(
+          (e) =>
+              (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
+              !dismissed.contains(e.id),
+        )
         .toList();
   }
 
@@ -69,6 +76,8 @@ class WeeklyMenuRepository {
       59,
     );
 
+    final dismissed = await DismissedSharedService.instance.idsForType('menus');
+
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
@@ -82,7 +91,11 @@ class WeeklyMenuRepository {
 
     return rows
         .map(WeeklyMenuEntry.fromMap)
-        .where((e) => e.ownerId == _uid || _isSharedWithMe(e.sharedWith))
+        .where(
+          (e) =>
+              (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
+              !dismissed.contains(e.id),
+        )
         .toList();
   }
 
@@ -128,12 +141,30 @@ class WeeklyMenuRepository {
   }
 
   Future<void> delete(String id) async {
+    // ¿Es un menú compartido POR OTRA persona? Entonces solo lo ocultamos
+    // para mí (no se borra en Firebase ni para el dueño).
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyMenus,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    final ownerId = rows.isEmpty
+        ? ''
+        : (rows.first['owner_id'] as String? ?? '');
+    final bool isShared = ownerId.isNotEmpty && ownerId != _uid;
+
     await DBProvider.db.delete(
       DBSchema.tableWeeklyMenus,
       where: 'id = ?',
       whereArgs: [id],
     );
-    _deleteFromFirebase(id);
+
+    if (isShared) {
+      await DismissedSharedService.instance.dismiss(id, 'menus');
+    } else {
+      _deleteFromFirebase(id);
+    }
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
@@ -142,7 +173,8 @@ class WeeklyMenuRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    // 1) Míos → borrado real (local + Firebase)
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -160,7 +192,13 @@ class WeeklyMenuRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    // 2) Compartidos conmigo → solo ocultar
+    await _dismissSharedInRange(
+      monday.millisecondsSinceEpoch,
+      sunday.millisecondsSinceEpoch,
+    );
   }
 
   Future<void> deleteDay(DateTime day) async {
@@ -169,7 +207,8 @@ class WeeklyMenuRepository {
       const Duration(hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    // 1) Míos → borrado real
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -187,7 +226,36 @@ class WeeklyMenuRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    // 2) Compartidos conmigo → solo ocultar
+    await _dismissSharedInRange(
+      midnight.millisecondsSinceEpoch,
+      endOfDay.millisecondsSinceEpoch,
+    );
+  }
+
+  /// Oculta (no borra) los menús compartidos por otros dentro del rango.
+  Future<void> _dismissSharedInRange(int fromMs, int toMs) async {
+    final shared = await DBProvider.db.query(
+      DBSchema.tableWeeklyMenus,
+      where: 'date >= ? AND date <= ? AND owner_id != ? AND owner_id != ?',
+      whereArgs: [fromMs, toMs, _uid, ''],
+    );
+    final ids = shared
+        .map((r) => r['id'] as String)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (ids.isEmpty) return;
+    await DismissedSharedService.instance.dismissAll(ids, 'menus');
+    // También los quitamos de local para que desaparezcan al instante.
+    for (final id in ids) {
+      await DBProvider.db.delete(
+        DBSchema.tableWeeklyMenus,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════

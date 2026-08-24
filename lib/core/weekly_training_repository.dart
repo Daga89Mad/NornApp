@@ -8,6 +8,7 @@ import '../models/weekly_training_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
+import 'dismissed_shared_service.dart';
 
 class WeeklyTrainingRepository {
   WeeklyTrainingRepository._();
@@ -36,6 +37,10 @@ class WeeklyTrainingRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
+    final dismissed = await DismissedSharedService.instance.idsForType(
+      'trainings',
+    );
+
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ?',
@@ -45,7 +50,11 @@ class WeeklyTrainingRepository {
 
     return rows
         .map(WeeklyTrainingEntry.fromMap)
-        .where((e) => e.ownerId == _uid || _isSharedWithMe(e.sharedWith))
+        .where(
+          (e) =>
+              (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
+              !dismissed.contains(e.id),
+        )
         .toList();
   }
 
@@ -141,12 +150,28 @@ class WeeklyTrainingRepository {
   }
 
   Future<void> delete(String id) async {
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTrainings,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    final ownerId = rows.isEmpty
+        ? ''
+        : (rows.first['owner_id'] as String? ?? '');
+    final bool isShared = ownerId.isNotEmpty && ownerId != _uid;
+
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTrainings,
       where: 'id = ?',
       whereArgs: [id],
     );
-    _deleteFromFirebase(id);
+
+    if (isShared) {
+      await DismissedSharedService.instance.dismiss(id, 'trainings');
+    } else {
+      _deleteFromFirebase(id);
+    }
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
@@ -155,7 +180,7 @@ class WeeklyTrainingRepository {
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -173,7 +198,12 @@ class WeeklyTrainingRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    await _dismissSharedInRange(
+      monday.millisecondsSinceEpoch,
+      sunday.millisecondsSinceEpoch,
+    );
   }
 
   Future<void> deleteDay(DateTime day) async {
@@ -182,7 +212,7 @@ class WeeklyTrainingRepository {
       const Duration(hours: 23, minutes: 59, seconds: 59),
     );
 
-    final rows = await DBProvider.db.query(
+    final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
       whereArgs: [
@@ -200,7 +230,34 @@ class WeeklyTrainingRepository {
         _uid,
       ],
     );
-    for (final row in rows) _deleteFromFirebase(row['id'] as String);
+    for (final row in mine) _deleteFromFirebase(row['id'] as String);
+
+    await _dismissSharedInRange(
+      midnight.millisecondsSinceEpoch,
+      endOfDay.millisecondsSinceEpoch,
+    );
+  }
+
+  /// Oculta (no borra) los entrenamientos compartidos por otros en el rango.
+  Future<void> _dismissSharedInRange(int fromMs, int toMs) async {
+    final shared = await DBProvider.db.query(
+      DBSchema.tableWeeklyTrainings,
+      where: 'date >= ? AND date <= ? AND owner_id != ? AND owner_id != ?',
+      whereArgs: [fromMs, toMs, _uid, ''],
+    );
+    final ids = shared
+        .map((r) => r['id'] as String)
+        .where((id) => id.isNotEmpty)
+        .toList();
+    if (ids.isEmpty) return;
+    await DismissedSharedService.instance.dismissAll(ids, 'trainings');
+    for (final id in ids) {
+      await DBProvider.db.delete(
+        DBSchema.tableWeeklyTrainings,
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    }
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -302,6 +359,9 @@ class WeeklyTrainingRepository {
             for (final change in snap.docChanges) {
               if (change.type == DocumentChangeType.removed) {
                 await remove(change.doc.id);
+                // El dueño dejó de compartírmelo → limpio el "oculto" para que,
+                // si me lo vuelve a compartir, reaparezca.
+                await DismissedSharedService.instance.undismiss(change.doc.id);
               } else {
                 await upsert(change.doc);
               }
