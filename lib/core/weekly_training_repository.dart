@@ -9,6 +9,8 @@ import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
+import 'shared_date_override_service.dart';
+import 'date_change_service.dart';
 
 class WeeklyTrainingRepository {
   WeeklyTrainingRepository._();
@@ -36,31 +38,99 @@ class WeeklyTrainingRepository {
     final sunday = monday.add(
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
+    final fromMs = monday.millisecondsSinceEpoch;
+    final toMs = sunday.millisecondsSinceEpoch;
 
     final dismissed = await DismissedSharedService.instance.idsForType(
       'trainings',
     );
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'trainings',
+    );
+
+    final (whereSql, whereArgs) = SharedDateOverrideService.buildRangeWhere(
+      fromMs: fromMs,
+      toMs: toMs,
+      overrides: overrides,
+    );
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
-      where: 'date >= ? AND date <= ?',
-      whereArgs: [monday.millisecondsSinceEpoch, sunday.millisecondsSinceEpoch],
-      orderBy: 'date ASC, training_type ASC',
+      where: whereSql,
+      whereArgs: whereArgs,
     );
 
-    return rows
+    // Si el dueño ya aceptó la propuesta, mi override sobra.
+    await SharedDateOverrideService.instance.reconcile('trainings', {
+      for (final r in rows) (r['id'] as String): (r['date'] as int),
+    });
+
+    final list = rows
         .map(WeeklyTrainingEntry.fromMap)
+        .map((e) {
+          final ov = overrides[e.id];
+          return ov == null ? e : e.copyWith(date: ov);
+        })
         .where(
           (e) =>
               (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
-              !dismissed.contains(e.id),
+              !dismissed.contains(e.id) &&
+              e.date >= fromMs &&
+              e.date <= toMs,
         )
         .toList();
+
+    list.sort((a, b) {
+      final c = a.date.compareTo(b.date);
+      return c != 0 ? c : a.trainingType.compareTo(b.trainingType);
+    });
+    return list;
   }
 
   bool _isSharedWithMe(String sharedWith) {
     if (sharedWith.isEmpty) return false;
     return sharedWith.contains('"$_uid"');
+  }
+
+  /// Mueve un entrenamiento a otro día.
+  ///
+  /// · PROPIO      → cambia la fecha real y se sincroniza con todos.
+  /// · COMPARTIDO  → se me aplica YA a mí (override local) y se envía una
+  ///   propuesta al dueño y al resto, que deciden si la aceptan.
+  Future<void> moveToDay(WeeklyTrainingEntry entry, DateTime newDay) async {
+    final newDate = DateTime(
+      newDay.year,
+      newDay.month,
+      newDay.day,
+    ).millisecondsSinceEpoch;
+    if (newDate == entry.date) return;
+
+    final bool isForeign = entry.ownerId.isNotEmpty && entry.ownerId != _uid;
+
+    if (isForeign) {
+      await SharedDateOverrideService.instance.setOverride(
+        entry.id,
+        'trainings',
+        newDate,
+      );
+      final audience = <String>{
+        entry.ownerId,
+        ...WeeklyShareService.parseUids(entry.sharedWith),
+      };
+      await DateChangeService.instance.propose(
+        itemId: entry.id,
+        itemType: 'trainings',
+        itemTitle: entry.title,
+        ownerId: entry.ownerId,
+        oldDateMs: entry.date,
+        newDateMs: newDate,
+        audience: audience,
+      );
+      return;
+    }
+
+    await SharedDateOverrideService.instance.clear(entry.id, 'trainings');
+    await save(entry.copyWith(date: newDate, synced: 0));
   }
 
   /// Guarda un nuevo entry o actualiza uno existente.

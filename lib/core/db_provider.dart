@@ -10,7 +10,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _dbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 21
+  static const int _dbVersion = DBSchema.version; // 23
   Database? _database;
 
   Future<Database> get database async {
@@ -33,6 +33,7 @@ class DBProvider {
     await _ensureWeeklyTrainingsTable(db); // ← red de seguridad idempotente
     await _ensureFunContentSchema(db); // ← red de seguridad idempotente
     await _ensureDismissedSharedTable(db); // ← red de seguridad idempotente
+    await _ensureDateChangeTables(db); // ← red de seguridad idempotente
     return db;
   }
 
@@ -112,6 +113,27 @@ class DBProvider {
     }
   }
 
+  /// Crea las tablas de "mover de día" si no existiesen: el override local y
+  /// el espejo de propuestas pendientes.
+  Future<void> _ensureDateChangeTables(Database db) async {
+    Future<bool> exists(String table) async {
+      final res = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        [table],
+      );
+      return res.isNotEmpty;
+    }
+
+    if (!await exists(DBSchema.tableSharedDateOverrides)) {
+      await db.execute(DBSchema.createSharedDateOverrides);
+      debugPrint('🛠️ Tabla shared_date_overrides creada (red de seguridad)');
+    }
+    if (!await exists(DBSchema.tablePendingDateChanges)) {
+      await db.execute(DBSchema.createPendingDateChanges);
+      debugPrint('🛠️ Tabla pending_date_changes creada (red de seguridad)');
+    }
+  }
+
   FutureOr<void> _onCreate(Database db, int version) async {
     await db.execute(DBSchema.createUsers);
     await db.execute(DBSchema.createEvents);
@@ -127,7 +149,9 @@ class DBProvider {
     await db.execute(DBSchema.createWeeklyTasks);
     await db.execute(DBSchema.createCalendarCategories);
     await db.execute(DBSchema.createWeeklyTrainings);
-    await db.execute(DBSchema.createDismissedShared); // ← NUEVO
+    await db.execute(DBSchema.createDismissedShared);
+    await db.execute(DBSchema.createSharedDateOverrides); // ← NUEVO
+    await db.execute(DBSchema.createPendingDateChanges); // ← NUEVO
   }
 
   FutureOr<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
@@ -281,6 +305,16 @@ class DBProvider {
           debugPrint(
             'Migración v21: fun-content corregido + dismissed_shared creada',
           );
+          break;
+        // ── v22: override local de fecha para items compartidos ─────────────
+        case 22:
+          await db.execute(DBSchema.createSharedDateOverrides);
+          debugPrint('Migración v22: tabla shared_date_overrides creada');
+          break;
+        // ── v23: propuestas de cambio de fecha pendientes ───────────────────
+        case 23:
+          await db.execute(DBSchema.createPendingDateChanges);
+          debugPrint('Migración v23: tabla pending_date_changes creada');
           break;
       }
     }

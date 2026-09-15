@@ -8,6 +8,8 @@ import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
+import 'shared_date_override_service.dart';
+import 'date_change_service.dart';
 
 class WeeklyMenuRepository {
   WeeklyMenuRepository._();
@@ -31,33 +33,10 @@ class WeeklyMenuRepository {
     final sunday = monday.add(
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
-
-    final dismissed = await DismissedSharedService.instance.idsForType('menus');
-
-    final rows = await DBProvider.db.query(
-      DBSchema.tableWeeklyMenus,
-      where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
-      orderBy: 'date ASC, meal_type ASC',
+    return _queryRange(
+      monday.millisecondsSinceEpoch,
+      sunday.millisecondsSinceEpoch,
     );
-
-    return rows
-        .map(WeeklyMenuEntry.fromMap)
-        .where(
-          (e) =>
-              (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
-              !dismissed.contains(e.id),
-        )
-        .toList();
-  }
-
-  bool _isSharedWithMe(String sharedWith) {
-    if (sharedWith.isEmpty) return false;
-    return sharedWith.contains('"$_uid"');
   }
 
   /// Devuelve todos los menús (propios y compartidos conmigo) cuyo día cae
@@ -75,28 +54,103 @@ class WeeklyMenuRepository {
       59,
       59,
     );
+    return _queryRange(
+      firstDay.millisecondsSinceEpoch,
+      lastDay.millisecondsSinceEpoch,
+    );
+  }
 
+  /// Lectura común: aplica la fecha local (override) de los menús compartidos
+  /// que yo haya movido de día.
+  Future<List<WeeklyMenuEntry>> _queryRange(int fromMs, int toMs) async {
     final dismissed = await DismissedSharedService.instance.idsForType('menus');
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'menus',
+    );
+
+    final (whereSql, whereArgs) = SharedDateOverrideService.buildRangeWhere(
+      fromMs: fromMs,
+      toMs: toMs,
+      overrides: overrides,
+    );
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
-      where: 'date >= ? AND date <= ? AND (owner_id = ? OR owner_id != "")',
-      whereArgs: [
-        firstDay.millisecondsSinceEpoch,
-        lastDay.millisecondsSinceEpoch,
-        _uid,
-      ],
-      orderBy: 'date ASC, meal_type ASC',
+      where: whereSql,
+      whereArgs: whereArgs,
     );
 
-    return rows
+    // Si el dueño ya aceptó la propuesta, mi override sobra.
+    await SharedDateOverrideService.instance.reconcile('menus', {
+      for (final r in rows) (r['id'] as String): (r['date'] as int),
+    });
+
+    final list = rows
         .map(WeeklyMenuEntry.fromMap)
+        .map((e) {
+          final ov = overrides[e.id];
+          return ov == null ? e : e.copyWith(date: ov);
+        })
         .where(
           (e) =>
               (e.ownerId == _uid || _isSharedWithMe(e.sharedWith)) &&
-              !dismissed.contains(e.id),
+              !dismissed.contains(e.id) &&
+              e.date >= fromMs &&
+              e.date <= toMs,
         )
         .toList();
+
+    list.sort((a, b) {
+      final c = a.date.compareTo(b.date);
+      return c != 0 ? c : a.mealType.compareTo(b.mealType);
+    });
+    return list;
+  }
+
+  bool _isSharedWithMe(String sharedWith) {
+    if (sharedWith.isEmpty) return false;
+    return sharedWith.contains('"$_uid"');
+  }
+
+  /// Mueve un menú a otro día.
+  ///
+  /// · Menú PROPIO      → cambia la fecha real y se sincroniza con todos.
+  /// · Menú COMPARTIDO  → se me aplica YA a mí (override local) y se envía una
+  ///   propuesta al dueño y al resto, que deciden si la aceptan.
+  Future<void> moveToDay(WeeklyMenuEntry entry, DateTime newDay) async {
+    final newDate = DateTime(
+      newDay.year,
+      newDay.month,
+      newDay.day,
+    ).millisecondsSinceEpoch;
+    if (newDate == entry.date) return;
+
+    final bool isForeign = entry.ownerId.isNotEmpty && entry.ownerId != _uid;
+
+    if (isForeign) {
+      await SharedDateOverrideService.instance.setOverride(
+        entry.id,
+        'menus',
+        newDate,
+      );
+      final audience = <String>{
+        entry.ownerId,
+        ...WeeklyShareService.parseUids(entry.sharedWith),
+      };
+      await DateChangeService.instance.propose(
+        itemId: entry.id,
+        itemType: 'menus',
+        itemTitle: entry.title,
+        ownerId: entry.ownerId,
+        oldDateMs: entry.date,
+        newDateMs: newDate,
+        audience: audience,
+      );
+      return;
+    }
+
+    await SharedDateOverrideService.instance.clear(entry.id, 'menus');
+    await save(entry.copyWith(date: newDate, synced: 0));
   }
 
   /// Guarda un nuevo entry o actualiza uno existente.

@@ -1,7 +1,7 @@
 // lib/core/db_schema.dart
 class DBSchema {
   static const int version =
-      21; // ← v21: esquema fun-content corregido + dismissed_shared
+      23; // ← v23: shared_date_overrides + pending_date_changes
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -16,7 +16,11 @@ class DBSchema {
   static const String tableWeeklyMenus = 'weekly_menus';
   static const String tableWeeklyTasks = 'weekly_tasks';
   static const String tableWeeklyTrainings = 'weekly_trainings';
-  static const String tableDismissedShared = 'dismissed_shared'; // ← NUEVO
+  static const String tableDismissedShared = 'dismissed_shared';
+  static const String tableSharedDateOverrides =
+      'shared_date_overrides'; // ← NUEVO
+  static const String tablePendingDateChanges =
+      'pending_date_changes'; // ← NUEVO
 
   static const String createUsers =
       """CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL, name TEXT, last_sync INTEGER)""";
@@ -175,6 +179,39 @@ class DBSchema {
       item_id TEXT NOT NULL,
       item_type TEXT NOT NULL,
       PRIMARY KEY (item_id, item_type)
+    )
+  """;
+
+  // ── NUEVO: fecha local personalizada para un item COMPARTIDO ───────────────
+  // Cuando alguien mueve de día un item que no es suyo, el cambio se aplica
+  // de inmediato en SU calendario mediante esta tabla, y al dueño y al resto
+  // se les envía una propuesta (ver pending_date_changes). Cuando la propuesta
+  // se acepta y la fecha real ya coincide, el override se borra solo.
+  static const String createSharedDateOverrides = """
+    CREATE TABLE shared_date_overrides (
+      item_id TEXT NOT NULL,
+      item_type TEXT NOT NULL,
+      date INTEGER NOT NULL,
+      PRIMARY KEY (item_id, item_type)
+    )
+  """;
+
+  // ── NUEVO: propuestas de cambio de fecha pendientes de responder ───────────
+  // Espejo local de los documentos 'date_change_requests' de Firestore en los
+  // que yo aparezco como pendiente. Se muestran al entrar en la pantalla
+  // correspondiente (tareas, menús o entrenamiento).
+  static const String createPendingDateChanges = """
+    CREATE TABLE pending_date_changes (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      item_type TEXT NOT NULL,
+      item_title TEXT NOT NULL DEFAULT '',
+      owner_id TEXT NOT NULL DEFAULT '',
+      from_uid TEXT NOT NULL DEFAULT '',
+      from_name TEXT NOT NULL DEFAULT '',
+      old_date INTEGER NOT NULL DEFAULT 0,
+      new_date INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL DEFAULT 0
     )
   """;
 }

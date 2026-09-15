@@ -157,48 +157,51 @@ class ShiftAssignmentRepository {
   Future<bool> toggle(String shiftId, DateTime day) async {
     final uid = _myUid;
     final assigned = await getAssignedShiftIds(day);
+
     if (assigned.contains(shiftId)) {
+      // Solo borra MI asignación: nunca las de los amigos que me comparten
+      // un turno ese mismo día.
       await DBProvider.db.delete(
         _table,
-        where: 'shift_id = ? AND date = ?',
-        whereArgs: [shiftId, _dayMs(day)],
+        where:
+            'shift_id = ? AND date = ? AND (owner_id IS NULL OR owner_id = ?)',
+        whereArgs: [shiftId, _dayMs(day), uid],
       );
       await FirebaseSyncService.instance.deleteShiftAssignment(shiftId, day);
       return false;
-    } else {
-      final id = _generateId();
-      // Obtener datos del turno para desnormalizar
-      final allShifts = await ShiftRepository.instance.getAll();
-      final shift = allShifts.firstWhere(
-        (s) => s.id == shiftId,
-        orElse: () => ShiftModel(
-          name: '',
-          color: Colors.blue,
-          from: const TimeOfDay(hour: 0, minute: 0),
-          to: const TimeOfDay(hour: 8, minute: 0),
-        ),
-      );
-      final fromMin = shift.from.hour * 60 + shift.from.minute;
-      final toMin = shift.to.hour * 60 + shift.to.minute;
-
-      await DBProvider.db.insertOrReplace(_table, {
-        'id': id,
-        'shift_id': shiftId,
-        'date': _dayMs(day),
-        'owner_id': uid,
-        'shift_name': shift.name,
-        'shift_color': shift.color.value,
-        'shift_from_minutes': fromMin,
-        'shift_to_minutes': toMin,
-      });
-      await FirebaseSyncService.instance.pushShiftAssignment(
-        id,
-        shiftId,
-        day,
-        shift: shift,
-      );
-      return true;
     }
+
+    final id = _generateId();
+    final allShifts = await ShiftRepository.instance.getAll();
+    final shift = allShifts.firstWhere(
+      (s) => s.id == shiftId,
+      orElse: () => ShiftModel(
+        name: '',
+        color: Colors.blue,
+        from: const TimeOfDay(hour: 0, minute: 0),
+        to: const TimeOfDay(hour: 8, minute: 0),
+      ),
+    );
+    final fromMin = shift.from.hour * 60 + shift.from.minute;
+    final toMin = shift.to.hour * 60 + shift.to.minute;
+
+    await DBProvider.db.insertOrReplace(_table, {
+      'id': id,
+      'shift_id': shiftId,
+      'date': _dayMs(day),
+      'owner_id': uid,
+      'shift_name': shift.name,
+      'shift_color': shift.color.value,
+      'shift_from_minutes': fromMin,
+      'shift_to_minutes': toMin,
+    });
+    await FirebaseSyncService.instance.pushShiftAssignment(
+      id,
+      shiftId,
+      day,
+      shift: shift,
+    );
+    return true;
   }
 
   Future<void> deleteAllForShift(String shiftId) async {

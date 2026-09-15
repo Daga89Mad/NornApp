@@ -8,6 +8,8 @@ import 'db_provider.dart';
 import 'db_schema.dart';
 import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
+import 'shared_date_override_service.dart';
+import 'date_change_service.dart';
 
 class WeeklyTaskRepository {
   WeeklyTaskRepository._();
@@ -26,35 +28,68 @@ class WeeklyTaskRepository {
   // LOCAL (SQLite)
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Devuelve TODAS las tareas de la semana (principales y subtareas).
+  /// Devuelve TODAS las tareas de la semana (principales y subtareas),
+  /// aplicando la fecha local (override) de las tareas compartidas que yo haya
+  /// movido de día.
   Future<List<WeeklyTask>> getTasksForWeek(DateTime weekStart) async {
     final monday = _mondayOf(weekStart);
     final sunday = monday.add(
       const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
     );
+    final fromMs = monday.millisecondsSinceEpoch;
+    final toMs = sunday.millisecondsSinceEpoch;
 
     final dismissed = await DismissedSharedService.instance.idsForType('tasks');
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'tasks',
+    );
+
+    final (whereSql, whereArgs) = SharedDateOverrideService.buildRangeWhere(
+      fromMs: fromMs,
+      toMs: toMs,
+      overrides: overrides,
+    );
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
-      where: 'date >= ? AND date <= ?',
-      whereArgs: [monday.millisecondsSinceEpoch, sunday.millisecondsSinceEpoch],
-      orderBy: 'date ASC, title ASC',
+      where: whereSql,
+      whereArgs: whereArgs,
     );
 
-    return rows
+    // Si el dueño ya aceptó la propuesta, la fecha real coincide con mi
+    // override y este deja de tener sentido: se limpia.
+    await SharedDateOverrideService.instance.reconcile('tasks', {
+      for (final r in rows) (r['id'] as String): (r['date'] as int),
+    });
+
+    final list = rows
         .map(WeeklyTask.fromMap)
+        .map((t) {
+          final ov = overrides[t.id];
+          return ov == null ? t : t.copyWith(date: ov);
+        })
         .where(
           (t) =>
               (t.ownerId == _uid || _isSharedWithMe(t.sharedWith)) &&
-              !dismissed.contains(t.id),
+              !dismissed.contains(t.id) &&
+              t.date >= fromMs &&
+              t.date <= toMs,
         )
         .toList();
+
+    list.sort((a, b) {
+      final c = a.date.compareTo(b.date);
+      return c != 0 ? c : a.title.compareTo(b.title);
+    });
+    return list;
   }
 
-  /// Subtareas de una tarea concreta.
+  /// Subtareas de una tarea concreta (con fecha local aplicada).
   Future<List<WeeklyTask>> getSubtasks(String parentId) async {
     final dismissed = await DismissedSharedService.instance.idsForType('tasks');
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'tasks',
+    );
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'parent_id = ?',
@@ -63,6 +98,10 @@ class WeeklyTaskRepository {
     );
     return rows
         .map(WeeklyTask.fromMap)
+        .map((t) {
+          final ov = overrides[t.id];
+          return ov == null ? t : t.copyWith(date: ov);
+        })
         .where((t) => !dismissed.contains(t.id))
         .toList();
   }
@@ -434,19 +473,66 @@ class WeeklyTaskRepository {
     }
   }
 
-  /// Mueve una tarea a otro día (cambia su fecha). Arrastra sus subtareas.
+  /// Mueve una tarea a otro día. Arrastra sus subtareas.
+  ///
+  /// · Tarea PROPIA      → cambia la fecha real y se sincroniza: todos los que
+  ///   la tengan compartida la ven en el día nuevo.
+  /// · Tarea COMPARTIDA  → el cambio se aplica YA en mi calendario (override
+  ///   local) y se envía una propuesta al dueño y al resto de destinatarios,
+  ///   que decidirán si la aceptan. Nunca se borra nada.
   Future<void> moveToDay(WeeklyTask task, DateTime newDay) async {
     final newDate = DateTime(
       newDay.year,
       newDay.month,
       newDay.day,
     ).millisecondsSinceEpoch;
+    if (newDate == task.date) return;
+
+    final bool isForeign = task.ownerId.isNotEmpty && task.ownerId != _uid;
+
+    if (isForeign) {
+      // 1) A mí se me cambia al instante.
+      await SharedDateOverrideService.instance.setOverride(
+        task.id,
+        'tasks',
+        newDate,
+      );
+      final subs = task.parentId.isEmpty
+          ? await getSubtasks(task.id)
+          : <WeeklyTask>[];
+      for (final s in subs) {
+        await SharedDateOverrideService.instance.setOverride(
+          s.id,
+          'tasks',
+          newDate,
+        );
+      }
+
+      // 2) Al dueño y al resto se les propone el cambio.
+      final audience = <String>{
+        task.ownerId,
+        ...WeeklyShareService.parseUids(task.sharedWith),
+      };
+      await DateChangeService.instance.propose(
+        itemId: task.id,
+        itemType: 'tasks',
+        itemTitle: task.title,
+        ownerId: task.ownerId,
+        oldDateMs: task.date,
+        newDateMs: newDate,
+        audience: audience,
+      );
+      return;
+    }
+
+    // Tarea propia: fecha real + push a Firebase.
+    await SharedDateOverrideService.instance.clear(task.id, 'tasks');
     await save(task.copyWith(date: newDate, synced: 0));
 
-    // Mover también las subtareas para que sigan al padre.
     if (task.parentId.isEmpty) {
       final subs = await getSubtasks(task.id);
       for (final s in subs) {
+        await SharedDateOverrideService.instance.clear(s.id, 'tasks');
         await save(s.copyWith(date: newDate, synced: 0));
       }
     }

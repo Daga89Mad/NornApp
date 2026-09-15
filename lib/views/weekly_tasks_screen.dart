@@ -7,6 +7,8 @@ import '../models/friend_model.dart';
 import '../core/weekly_task_repository.dart';
 import '../core/weekly_share_service.dart';
 import '../core/friend_repository.dart';
+import '../core/date_change_service.dart';
+import 'date_change_prompt.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -76,12 +78,34 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
         if (mounted) _loadWeek();
       },
     );
+    // Propuestas de cambio de día que alguien me ha enviado.
+    DateChangeService.instance.startListening(
+      onChanged: () {
+        if (mounted) _checkPendingDateChanges();
+      },
+    );
+    DateChangeService.instance.pullPending().then((_) {
+      if (mounted) _checkPendingDateChanges();
+    });
   }
 
   @override
   void dispose() {
     WeeklyShareService.instance.stopListening();
+    DateChangeService.instance.stopListening();
     super.dispose();
+  }
+
+  /// Si alguien ha movido de día una tarea compartida, aquí se pregunta si
+  /// acepto el cambio. Si soy el dueño y acepto, se mueve para todos.
+  Future<void> _checkPendingDateChanges() async {
+    if (!mounted) return;
+    final answered = await showPendingDateChanges(
+      context,
+      'tasks',
+      accent: _primary,
+    );
+    if (answered && mounted) _loadWeek();
   }
 
   DateTime _mondayOf(DateTime d) {
@@ -539,6 +563,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                       ),
                     TextField(
                       controller: titleCtrl,
+                      enabled: !isForeign,
                       decoration: const InputDecoration(
                         labelText: 'Tarea',
                         border: OutlineInputBorder(),
@@ -547,6 +572,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                     const SizedBox(height: 12),
                     TextField(
                       controller: descCtrl,
+                      enabled: !isForeign,
                       decoration: const InputDecoration(
                         labelText: 'Descripción',
                         border: OutlineInputBorder(),
@@ -740,62 +766,87 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: () async {
-                  await _repo.delete(task.id);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  _loadWeek();
-                },
-                child: const Text(
-                  'Eliminar',
-                  style: TextStyle(color: Colors.redAccent),
+              // Una tarea compartida conmigo NO se puede borrar: solo mover.
+              if (!isForeign)
+                TextButton(
+                  onPressed: () async {
+                    await _repo.delete(task.id);
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    _loadWeek();
+                  },
+                  child: const Text(
+                    'Eliminar',
+                    style: TextStyle(color: Colors.redAccent),
+                  ),
                 ),
-              ),
               TextButton.icon(
                 icon: const Icon(Icons.event_repeat, size: 18),
                 label: const Text('Mover a…'),
-                onPressed: () async {
-                  final picked = await showDatePicker(
-                    context: ctx,
-                    initialDate: DateTime.fromMillisecondsSinceEpoch(task.date),
-                    firstDate: DateTime(2020),
-                    lastDate: DateTime(2100),
-                  );
-                  if (picked == null) return;
-                  await _repo.moveToDay(task, picked);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  _loadWeek();
-                },
+                onPressed: () => _moveTaskToAnotherDay(ctx, task, isForeign),
               ),
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
-                child: const Text('Cancelar'),
+                child: Text(isForeign ? 'Cerrar' : 'Cancelar'),
               ),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: _primary),
-                onPressed: () async {
-                  final title = titleCtrl.text.trim();
-                  if (title.isEmpty) return;
-                  await _repo.save(
-                    task.copyWith(
-                      title: title,
-                      description: descCtrl.text.trim(),
-                      synced: 0,
-                    ),
-                  );
-                  if (ctx.mounted) Navigator.pop(ctx);
-                  _loadWeek();
-                },
-                child: const Text(
-                  'Guardar',
-                  style: TextStyle(color: Colors.white),
+              if (!isForeign)
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: _primary),
+                  onPressed: () async {
+                    final title = titleCtrl.text.trim();
+                    if (title.isEmpty) return;
+                    await _repo.save(
+                      task.copyWith(
+                        title: title,
+                        description: descCtrl.text.trim(),
+                        synced: 0,
+                      ),
+                    );
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    _loadWeek();
+                  },
+                  child: const Text(
+                    'Guardar',
+                    style: TextStyle(color: Colors.white),
+                  ),
                 ),
-              ),
             ],
           );
         },
       ),
     );
+    _loadWeek();
+  }
+
+  /// Mueve una tarea a otro día.
+  ///
+  /// · Tarea propia      → cambia la fecha para todos los que la tengan.
+  /// · Tarea compartida  → se me aplica a mí al momento y al dueño y al resto
+  ///   les llega una propuesta que podrán aceptar o rechazar.
+  Future<void> _moveTaskToAnotherDay(
+    BuildContext ctx,
+    WeeklyTask task,
+    bool isForeign,
+  ) async {
+    final picked = await showDatePicker(
+      context: ctx,
+      initialDate: DateTime.fromMillisecondsSinceEpoch(task.date),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+
+    await _repo.moveToDay(task, picked);
+    if (ctx.mounted) Navigator.pop(ctx);
+
+    if (mounted && isForeign) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Movida en tu semana. Se ha enviado la propuesta a quien la comparte.',
+          ),
+        ),
+      );
+    }
     _loadWeek();
   }
 

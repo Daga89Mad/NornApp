@@ -306,6 +306,54 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return '${names[m.month - 1]} ${m.year}';
   }
 
+  // ── Tira compacta con TODOS los turnos del día ────────────────────────────
+  //
+  // Antes la celda compacta solo pintaba el PRIMER turno propio, y el turno
+  // compartido únicamente si no había ninguno propio. Resultado: si un amigo
+  // te compartía un turno y luego tú añadías el tuyo, solo se veía uno.
+  // Ahora se muestran todos los que correspondan a ese día (propios primero);
+  // a partir de 3 se resume con "+N" para no romper la celda.
+  Widget _compactShiftStrip(
+    List<ShiftModel> own,
+    List<SharedShiftInfo> shared,
+  ) {
+    if (own.isEmpty && shared.isEmpty) return const SizedBox.shrink();
+
+    const int maxBadges = 3;
+    final List<Widget> badges = [
+      ...own.map((s) => _shiftBadge(s, compact: true)),
+      ...shared.map((s) => _sharedShiftBadge(s, compact: true)),
+    ];
+    final visible = badges.take(maxBadges).toList();
+    final int hidden = badges.length - visible.length;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: SizedBox(
+        height: 15,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ...visible,
+              if (hidden > 0)
+                Text(
+                  '+$hidden',
+                  style: const TextStyle(
+                    fontSize: 8,
+                    fontWeight: FontWeight.w700,
+                    height: 1.0,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   // ── Widget: turno 3D ──────────────────────────────────────────────────────
 
   Widget _shiftBadge(ShiftModel shift, {bool compact = false}) {
@@ -935,11 +983,6 @@ class _CalendarScreenState extends State<CalendarScreen> {
     // de prioridad. ClipRect evita cualquier desbordamiento visual residual.
     //
     if (compact) {
-      final ShiftModel? firstShift = shifts.isNotEmpty ? shifts.first : null;
-      final SharedShiftInfo? firstShared = sharedShifts.isNotEmpty
-          ? sharedShifts.first
-          : null;
-
       final Color? dotColor = events.isNotEmpty ? events.first.color : null;
       final int extra = events.length > 1 ? events.length - 1 : 0;
 
@@ -971,18 +1014,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         height: 1.0,
                       ),
                     ),
-                    // Badge de turno propio
-                    if (firstShift != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: _shiftBadge(firstShift, compact: true),
-                      ),
-                    // Badge de turno compartido (si no hay propio)
-                    if (firstShift == null && firstShared != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 2),
-                        child: _sharedShiftBadge(firstShared, compact: true),
-                      ),
+                    // Turnos del día: propios Y compartidos, todos a la vez
+                    _compactShiftStrip(shifts, sharedShifts),
                     // Punto o emoji de evento
                     if (dotColor != null)
                       Padding(

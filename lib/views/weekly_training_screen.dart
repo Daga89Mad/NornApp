@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/weekly_training_model.dart';
 import '../core/weekly_training_repository.dart';
+import '../core/date_change_service.dart';
 import 'share_weekly_dialog.dart';
+import 'date_change_prompt.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
 const _diasSemana = [
@@ -77,12 +79,34 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
         if (mounted) _loadWeek();
       },
     );
+    // Propuestas de cambio de día que alguien me ha enviado.
+    DateChangeService.instance.startListening(
+      onChanged: () {
+        if (mounted) _checkPendingDateChanges();
+      },
+    );
+    DateChangeService.instance.pullPending().then((_) {
+      if (mounted) _checkPendingDateChanges();
+    });
   }
 
   @override
   void dispose() {
     _repo.stopListening();
+    DateChangeService.instance.stopListening();
     super.dispose();
+  }
+
+  /// Si alguien ha movido de día un entrenamiento compartido, aquí se pregunta
+  /// si acepto el cambio. Si soy el dueño y acepto, se mueve para todos.
+  Future<void> _checkPendingDateChanges() async {
+    if (!mounted) return;
+    final answered = await showPendingDateChanges(
+      context,
+      'trainings',
+      accent: _primary,
+    );
+    if (answered && mounted) _loadWeek();
   }
 
   DateTime _mondayOf(DateTime d) {
@@ -564,6 +588,8 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
             ),
           ),
           actions: [
+            // Un entrenamiento compartido conmigo NO se puede borrar:
+            // solo se puede mover de día.
             if (!isForeign)
               TextButton(
                 onPressed: () async {
@@ -576,9 +602,14 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                   style: TextStyle(color: Colors.redAccent),
                 ),
               ),
+            TextButton.icon(
+              icon: const Icon(Icons.event_repeat, size: 18),
+              label: const Text('Mover a…'),
+              onPressed: () => _moveEntryToAnotherDay(ctx, entry, isForeign),
+            ),
             TextButton(
               onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar'),
+              child: Text(isForeign ? 'Cerrar' : 'Cancelar'),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _primary),
@@ -608,6 +639,39 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
         ),
       ),
     );
+    _loadWeek();
+  }
+
+  /// Mueve un entrenamiento a otro día.
+  ///
+  /// · Propio      → cambia la fecha para todos los que lo tengan.
+  /// · Compartido  → se me aplica a mí al momento y al dueño y al resto les
+  ///   llega una propuesta que podrán aceptar o rechazar.
+  Future<void> _moveEntryToAnotherDay(
+    BuildContext ctx,
+    WeeklyTrainingEntry entry,
+    bool isForeign,
+  ) async {
+    final picked = await showDatePicker(
+      context: ctx,
+      initialDate: DateTime.fromMillisecondsSinceEpoch(entry.date),
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (picked == null) return;
+
+    await _repo.moveToDay(entry, picked);
+    if (ctx.mounted) Navigator.pop(ctx);
+
+    if (mounted && isForeign) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Movido en tu semana. Se ha enviado la propuesta a quien lo comparte.',
+          ),
+        ),
+      );
+    }
     _loadWeek();
   }
 
