@@ -858,6 +858,12 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         elevation: 0,
         title: const Text('Menú Semanal'),
         actions: [
+          // Chapa con las propuestas de cambio de día pendientes.
+          PendingDateChangesButton(
+            type: 'menus',
+            accent: _primary,
+            onResolved: _loadWeek,
+          ),
           IconButton(
             tooltip: 'Lista de la compra',
             icon: const Icon(Icons.shopping_cart_outlined),

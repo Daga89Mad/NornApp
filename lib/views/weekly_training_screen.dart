@@ -759,6 +759,12 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
         elevation: 0,
         title: const Text('Entrenamiento Semanal'),
         actions: [
+          // Chapa con las propuestas de cambio de día pendientes.
+          PendingDateChangesButton(
+            type: 'trainings',
+            accent: _primary,
+            onResolved: _loadWeek,
+          ),
           IconButton(
             tooltip: 'Compartir',
             icon: const Icon(Icons.people_outline),

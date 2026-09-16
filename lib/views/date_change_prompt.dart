@@ -3,6 +3,7 @@
 // Diálogo que se muestra al entrar en Tareas / Menús / Entrenamiento cuando
 // alguien ha movido de día un item compartido y falta mi respuesta.
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../core/date_change_service.dart';
@@ -205,6 +206,106 @@ class _DateChangeDialog extends StatelessWidget {
             ),
           ],
         ),
+      ],
+    );
+  }
+}
+
+/// Botón de la barra superior con el número de propuestas pendientes.
+///
+/// Sirve para dos cosas: que no dependa de pillar el diálogo al vuelo (si se
+/// pulsa "Más tarde" la propuesta sigue accesible aquí) y para poder ver de un
+/// vistazo si este dispositivo está recibiendo algo.
+class PendingDateChangesButton extends StatefulWidget {
+  final String type; // 'tasks' | 'menus' | 'trainings'
+  final Color accent;
+  final VoidCallback? onResolved;
+
+  const PendingDateChangesButton({
+    super.key,
+    required this.type,
+    required this.accent,
+    this.onResolved,
+  });
+
+  @override
+  State<PendingDateChangesButton> createState() =>
+      _PendingDateChangesButtonState();
+}
+
+class _PendingDateChangesButtonState extends State<PendingDateChangesButton> {
+  int _count = 0;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+    // Sondeo ligero: el espejo local lo actualiza el listener del servicio.
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    final n = await DateChangeService.instance.pendingCount(widget.type);
+    if (mounted && n != _count) setState(() => _count = n);
+  }
+
+  Future<void> _open() async {
+    if (_count == 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No hay cambios de día pendientes de responder.'),
+        ),
+      );
+      return;
+    }
+    final answered = await showPendingDateChanges(
+      context,
+      widget.type,
+      accent: widget.accent,
+    );
+    await _refresh();
+    if (answered) widget.onResolved?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        IconButton(
+          tooltip: 'Cambios de día propuestos',
+          icon: const Icon(Icons.event_repeat),
+          onPressed: _open,
+        ),
+        if (_count > 0)
+          Positioned(
+            top: 6,
+            right: 6,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.redAccent,
+                borderRadius: BorderRadius.circular(9),
+              ),
+              constraints: const BoxConstraints(minWidth: 16),
+              child: Text(
+                '$_count',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }

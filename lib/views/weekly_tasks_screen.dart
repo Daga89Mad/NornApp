@@ -944,6 +944,12 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
         elevation: 0,
         title: const Text('Tareas Semanales'),
         actions: [
+          // Chapa con las propuestas de cambio de día pendientes.
+          PendingDateChangesButton(
+            type: 'tasks',
+            accent: _primary,
+            onResolved: _loadWeek,
+          ),
           IconButton(
             tooltip: 'Compartir',
             icon: const Icon(Icons.people_outline),

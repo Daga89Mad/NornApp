@@ -5,22 +5,30 @@
 // Flujo:
 //   1. B mueve de día una tarea/menú/entrenamiento cuyo dueño es A.
 //   2. A B se le aplica el cambio YA (override local, ver SharedDateOverrideService).
-//   3. Se crea un doc en 'date_change_requests' con la audiencia = dueño +
-//      resto de destinatarios (todos menos B).
-//   4. Cada uno de ellos, al abrir la pantalla correspondiente, ve un diálogo
+//   3. Se crea UN documento en 'date_change_requests' POR CADA destinatario
+//      (dueño + resto de gente con la que está compartido, menos B), cada uno
+//      con su 'to_uid'.
+//   4. Cada uno, al abrir la pantalla correspondiente, ve un diálogo
 //      "X propone mover ... del día A al día B" y decide.
 //        · Acepta y es el DUEÑO  → cambia la fecha real del documento, con lo
 //          que el cambio se propaga a todo el mundo.
 //        · Acepta y NO es dueño  → se guarda su propio override local.
 //        · Rechaza               → no pasa nada, el item sigue en su día.
-//   5. Cuando ya no queda nadie pendiente, el doc se borra.
+//   5. Responder borra el documento propio.
+//
+// POR QUÉ UN DOC POR DESTINATARIO Y NO UN ARRAY:
+//   Las reglas de Firestore no son filtros. En una consulta (list) no evalúan
+//   documento a documento: intentan demostrar la regla a partir de los filtros
+//   de la consulta. Una regla tipo 'uid in resource.data.audience' no se puede
+//   demostrar desde un 'where(pending, arrayContains: uid)', así que Firestore
+//   deniega la consulta ENTERA (permission-denied en el listener) aunque los
+//   datos sean correctos. Con 'to_uid' y una igualdad sí se puede demostrar.
 //
 // Reglas de Firestore necesarias (colección 'date_change_requests'):
-//   allow read:   request.auth.uid in resource.data.audience
+//   allow read:   request.auth.uid == resource.data.to_uid
 //                 || request.auth.uid == resource.data.from_uid;
 //   allow create: request.auth.uid == request.resource.data.from_uid;
-//   allow update, delete:
-//                 request.auth.uid in resource.data.audience
+//   allow delete: request.auth.uid == resource.data.to_uid
 //                 || request.auth.uid == resource.data.from_uid;
 
 import 'dart:async';
@@ -163,28 +171,46 @@ class DateChangeService {
         .where((u) => u.isNotEmpty && u != me)
         .toSet()
         .toList();
-    if (targets.isEmpty) return;
+    if (targets.isEmpty) {
+      debugPrint(
+        '⚠️ Propuesta NO enviada: audiencia vacía. '
+        'Recibido=$audience yo=$me dueño=$ownerId item=$itemId',
+      );
+      return;
+    }
 
     try {
       // Si ya había una propuesta viva para este item, la sustituimos.
       await _cancelExistingFor(itemId, itemType);
 
-      await _db.collection(_col).add({
-        'item_id': itemId,
-        'item_type': itemType,
-        'item_title': itemTitle,
-        'owner_id': ownerId,
-        'from_uid': me,
-        'from_name': _displayName,
-        'old_date': Timestamp.fromMillisecondsSinceEpoch(oldDateMs),
-        'new_date': Timestamp.fromMillisecondsSinceEpoch(newDateMs),
-        'audience': targets,
-        'pending': targets,
-        'accepted': <String>[],
-        'rejected': <String>[],
-        'created_at': FieldValue.serverTimestamp(),
-      });
-      debugPrint('📤 Propuesta de cambio de fecha enviada a ${targets.length}');
+      // IMPORTANTE: un documento POR DESTINATARIO, con 'to_uid' como string.
+      //
+      // Las reglas de Firestore no son filtros: en una consulta (list) no miran
+      // los documentos, intentan demostrar la regla a partir de los filtros de
+      // la consulta. Con un array ('pending' arrayContains uid) no pueden
+      // demostrar nada y deniegan la consulta entera. Con una igualdad
+      // (to_uid == uid) sí, y por eso el destinatario puede leer lo suyo.
+      final batch = _db.batch();
+      for (final uid in targets) {
+        batch.set(_db.collection(_col).doc(), {
+          'item_id': itemId,
+          'item_type': itemType,
+          'item_title': itemTitle,
+          'owner_id': ownerId,
+          'from_uid': me,
+          'from_name': _displayName,
+          'to_uid': uid,
+          'old_date': Timestamp.fromMillisecondsSinceEpoch(oldDateMs),
+          'new_date': Timestamp.fromMillisecondsSinceEpoch(newDateMs),
+          'created_at': FieldValue.serverTimestamp(),
+        });
+      }
+      await batch.commit();
+
+      debugPrint(
+        '📤 Propuesta de fecha creada | item=$itemId tipo=$itemType '
+        'yo=$me dueño=$ownerId destinatarios=$targets',
+      );
     } catch (e) {
       debugPrint('❌ Error creando propuesta de fecha: $e');
     }
@@ -217,7 +243,7 @@ class DateChangeService {
     try {
       final snap = await _db
           .collection(_col)
-          .where('pending', arrayContains: _uid)
+          .where('to_uid', isEqualTo: _uid)
           .get();
 
       // Reemplazamos el espejo local por lo que diga el servidor.
@@ -230,7 +256,9 @@ class DateChangeService {
 
       final rows = snap.docs.map((d) => _rowFromDoc(d.id, d.data())).toList();
       await DBProvider.db.batchInsert(DBSchema.tablePendingDateChanges, rows);
-      debugPrint('📥 ${rows.length} propuestas de cambio de fecha pendientes');
+      debugPrint(
+        '📥 ${rows.length} propuestas de fecha pendientes para uid=$_uid',
+      );
     } catch (e) {
       debugPrint('❌ Error pullPending date changes: $e');
     }
@@ -256,7 +284,7 @@ class DateChangeService {
 
     final sub = _db
         .collection(_col)
-        .where('pending', arrayContains: _uid)
+        .where('to_uid', isEqualTo: _uid)
         .snapshots()
         .listen((snap) async {
           bool changed = false;
@@ -282,6 +310,10 @@ class DateChangeService {
                 break;
             }
           }
+          debugPrint(
+            '📬 Propuestas de fecha para mí: ${snap.docs.length} '
+            '(uid=$_uid)',
+          );
           if (changed) onChanged?.call();
         }, onError: (e) => debugPrint('❌ Listener date_change_requests: $e'));
 
@@ -309,6 +341,15 @@ class DateChangeService {
 
   Future<int> pendingCount(String type) async =>
       (await pendingForType(type)).length;
+
+  /// Todas las propuestas pendientes, sin filtrar por tipo.
+  Future<List<PendingDateChange>> pendingAll() async {
+    final rows = await DBProvider.db.query(
+      DBSchema.tablePendingDateChanges,
+      orderBy: 'created_at ASC',
+    );
+    return rows.map(PendingDateChange.fromMap).toList();
+  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // RESPONDER
@@ -411,9 +452,9 @@ class DateChangeService {
     }
   }
 
+  /// Como cada destinatario tiene su propio documento, responder es
+  /// simplemente borrarlo: ya no está pendiente para nadie más.
   Future<void> _answer(PendingDateChange c, {required bool accepted}) async {
-    final me = _uid;
-
     // Fuera del espejo local pase lo que pase: ya he respondido.
     await DBProvider.db.delete(
       DBSchema.tablePendingDateChanges,
@@ -421,19 +462,12 @@ class DateChangeService {
       whereArgs: [c.id],
     );
 
-    if (me.isEmpty) return;
+    if (_uid.isEmpty) return;
     try {
-      final ref = _db.collection(_col).doc(c.id);
-      await ref.update({
-        'pending': FieldValue.arrayRemove([me]),
-        if (accepted) 'accepted': FieldValue.arrayUnion([me]),
-        if (!accepted) 'rejected': FieldValue.arrayUnion([me]),
-      });
-
-      // Si ya ha respondido todo el mundo, el doc no pinta nada.
-      final snap = await ref.get();
-      final pending = List<String>.from(snap.data()?['pending'] ?? const []);
-      if (pending.isEmpty) await ref.delete();
+      await _db.collection(_col).doc(c.id).delete();
+      debugPrint(
+        '✅ Propuesta ${accepted ? "aceptada" : "rechazada"} | doc=${c.id}',
+      );
     } catch (e) {
       debugPrint('❌ Error respondiendo propuesta de fecha: $e');
     }
