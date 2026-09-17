@@ -219,17 +219,43 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     );
   }
 
+  /// UIDs que debe heredar una copia: los amigos con los que está compartido
+  /// el item original (individual y/o global) según la BD local, más lo que
+  /// llevara la entrada en memoria por si la fila ya no existiera.
+  Future<Set<String>> _inheritedShareUids(WeeklyMenuEntry source) async {
+    final uids = <String>{};
+    try {
+      uids.addAll(
+        await WeeklyShareService.instance.getSharedUidsForItem(
+          type: 'menus',
+          docId: source.id,
+        ),
+      );
+    } catch (_) {}
+    uids.addAll(WeeklyShareService.parseUids(source.sharedWith));
+    uids
+      ..remove(_myUid)
+      ..remove('');
+    return uids;
+  }
+
   Future<void> _pasteIntoCurrentWeek() async {
     final clip = _clipboard;
     final source = _clipboardSourceMonday;
     if (clip == null || source == null) return;
 
     final offsetDays = _currentWeekStart.difference(source).inDays;
+    int sharedCount = 0;
+
     for (final e in clip) {
       final newDate = DateTime.fromMillisecondsSinceEpoch(
         e.date,
       ).add(Duration(days: offsetDays));
-      // Reseteamos propiedad → se guardan como míos y se sincronizan de cero.
+
+      // La copia es mía, pero conserva con quién estaba compartido el original.
+      final inherited = await _inheritedShareUids(e);
+      if (inherited.isNotEmpty) sharedCount++;
+
       final copy = e.copyWith(
         id: _repo.generateId(),
         date: DateTime(
@@ -239,15 +265,20 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
         ).millisecondsSinceEpoch,
         ownerId: '',
         ownerName: '',
-        sharedWith: '',
+        sharedWith: WeeklyShareService.uidsToJson(inherited),
         synced: 0,
       );
       await _repo.save(copy);
     }
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${clip.length} menús pegados en esta semana'),
+        content: Text(
+          sharedCount > 0
+              ? '${clip.length} menús pegados ($sharedCount se siguen compartiendo)'
+              : '${clip.length} menús pegados en esta semana',
+        ),
         backgroundColor: Colors.green.shade600,
       ),
     );

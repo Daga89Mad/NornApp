@@ -88,7 +88,10 @@ class _DateChangeDialog extends StatelessWidget {
     final bool soyDueno = change.ownerId.isNotEmpty && change.ownerId == myUid;
 
     return AlertDialog(
+      // scrollable evita que el contenido desborde con fuentes grandes.
+      scrollable: true,
       insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      contentPadding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
       title: Row(
         children: [
           Icon(Icons.event_repeat, color: accent, size: 22),
@@ -129,43 +132,52 @@ class _DateChangeDialog extends StatelessWidget {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Ahora',
-                      style: TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _fmtDia(change.oldDay),
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.lineThrough,
-                        color: Colors.grey,
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Ahora',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        _fmtDia(change.oldDay),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          decoration: TextDecoration.lineThrough,
+                          color: Colors.grey,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                Icon(Icons.arrow_forward, size: 18, color: accent),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Propuesto',
-                      style: TextStyle(fontSize: 11, color: Colors.grey),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      _fmtDia(change.newDay),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: accent,
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  child: Icon(Icons.arrow_forward, size: 18, color: accent),
+                ),
+                Flexible(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'Propuesto',
+                        style: TextStyle(fontSize: 11, color: Colors.grey),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Text(
+                        _fmtDia(change.newDay),
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: accent,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
@@ -177,36 +189,59 @@ class _DateChangeDialog extends StatelessWidget {
                 : 'Si aceptas, se moverá solo en tu calendario.',
             style: const TextStyle(fontSize: 12, color: Colors.grey),
           ),
+          const SizedBox(height: 16),
+
+          // ── Botonera propia (NO en `actions`) ──────────────────────────────
+          // Así no depende del OverflowBar de AlertDialog y "Aceptar" nunca
+          // se queda fuera del diálogo por falta de ancho.
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: accent,
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () => Navigator.pop<bool?>(context, true),
+              icon: const Icon(Icons.check, color: Colors.white, size: 18),
+              label: const Text(
+                'Aceptar el cambio',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: Colors.redAccent,
+                side: const BorderSide(color: Colors.redAccent),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              onPressed: () => Navigator.pop<bool?>(context, false),
+              icon: const Icon(Icons.close, size: 18),
+              label: const Text('Rechazar'),
+            ),
+          ),
+          const SizedBox(height: 4),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop<bool?>(context, null),
+              child: const Text(
+                'Decidir más tarde',
+                style: TextStyle(color: Colors.grey),
+              ),
+            ),
+          ),
         ],
       ),
-      actionsAlignment: MainAxisAlignment.spaceBetween,
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop<bool?>(context, null),
-          child: const Text('Más tarde', style: TextStyle(color: Colors.grey)),
-        ),
-        Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextButton(
-              onPressed: () => Navigator.pop<bool?>(context, false),
-              child: const Text(
-                'Rechazar',
-                style: TextStyle(color: Colors.redAccent),
-              ),
-            ),
-            const SizedBox(width: 4),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: accent),
-              onPressed: () => Navigator.pop<bool?>(context, true),
-              child: const Text(
-                'Aceptar',
-                style: TextStyle(color: Colors.white),
-              ),
-            ),
-          ],
-        ),
-      ],
+      // Vacío a propósito: la botonera va en el content.
+      actions: const [],
+      actionsPadding: EdgeInsets.zero,
     );
   }
 }

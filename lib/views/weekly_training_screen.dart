@@ -7,6 +7,7 @@ import '../core/weekly_training_repository.dart';
 import '../core/date_change_service.dart';
 import 'share_weekly_dialog.dart';
 import 'date_change_prompt.dart';
+import '../core/weekly_share_service.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
 const _diasSemana = [
@@ -210,17 +211,39 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
     );
   }
 
+  Future<Set<String>> _inheritedShareUids(WeeklyTrainingEntry source) async {
+    final uids = <String>{};
+    try {
+      uids.addAll(
+        await WeeklyShareService.instance.getSharedUidsForItem(
+          type: 'trainings',
+          docId: source.id,
+        ),
+      );
+    } catch (_) {}
+    uids.addAll(WeeklyShareService.parseUids(source.sharedWith));
+    uids
+      ..remove(_myUid)
+      ..remove('');
+    return uids;
+  }
+
   Future<void> _pasteIntoCurrentWeek() async {
     final clip = _clipboard;
     final source = _clipboardSourceMonday;
     if (clip == null || source == null) return;
 
     final offsetDays = _currentWeekStart.difference(source).inDays;
+    int sharedCount = 0;
+
     for (final e in clip) {
       final newDate = DateTime.fromMillisecondsSinceEpoch(
         e.date,
       ).add(Duration(days: offsetDays));
-      // Se pegan como míos, sin completar y para sincronizar de cero.
+
+      final inherited = await _inheritedShareUids(e);
+      if (inherited.isNotEmpty) sharedCount++;
+
       final copy = e.copyWith(
         id: _repo.generateId(),
         date: DateTime(
@@ -231,15 +254,20 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
         isDone: false,
         ownerId: '',
         ownerName: '',
-        sharedWith: '',
+        sharedWith: WeeklyShareService.uidsToJson(inherited),
         synced: 0,
       );
       await _repo.save(copy);
     }
+
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${clip.length} entrenamientos pegados en esta semana'),
+        content: Text(
+          sharedCount > 0
+              ? '${clip.length} entrenamientos pegados ($sharedCount se siguen compartiendo)'
+              : '${clip.length} entrenamientos pegados en esta semana',
+        ),
         backgroundColor: Colors.green.shade600,
       ),
     );

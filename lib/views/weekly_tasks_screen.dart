@@ -200,6 +200,23 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     );
   }
 
+  Future<Set<String>> _inheritedShareUids(WeeklyTask source) async {
+    final uids = <String>{};
+    try {
+      uids.addAll(
+        await WeeklyShareService.instance.getSharedUidsForItem(
+          type: 'tasks',
+          docId: source.id,
+        ),
+      );
+    } catch (_) {}
+    uids.addAll(WeeklyShareService.parseUids(source.sharedWith));
+    uids
+      ..remove(_myUid)
+      ..remove('');
+    return uids;
+  }
+
   Future<void> _pasteIntoCurrentWeek() async {
     final clip = _clipboard;
     final source = _clipboardSourceMonday;
@@ -214,11 +231,19 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       return DateTime(d.year, d.month, d.day).millisecondsSinceEpoch;
     }
 
-    // 1) Copiar primero las tareas principales, mapeando id viejo → id nuevo.
-    final idMap = <String, String>{};
+    final idMap = <String, String>{}; // id viejo → id nuevo
+    final parentShares = <String, Set<String>>{}; // id viejo del padre → uids
+    int sharedCount = 0;
+
+    // 1) Tareas principales.
     for (final t in clip.where((t) => t.parentId.isEmpty)) {
       final newId = _repo.generateId();
       idMap[t.id] = newId;
+
+      final inherited = await _inheritedShareUids(t);
+      parentShares[t.id] = inherited;
+      if (inherited.isNotEmpty) sharedCount++;
+
       await _repo.save(
         t.copyWith(
           id: newId,
@@ -226,16 +251,19 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           isDone: false,
           ownerId: '',
           ownerName: '',
-          sharedWith: '',
+          sharedWith: WeeklyShareService.uidsToJson(inherited),
           parentId: '',
           synced: 0,
         ),
       );
     }
 
-    // 2) Copiar subtareas, apuntando al nuevo id del padre (o suelta si no está).
+    // 2) Subtareas: heredan lo suyo + lo del padre.
     for (final t in clip.where((t) => t.parentId.isNotEmpty)) {
       final newParent = idMap[t.parentId] ?? '';
+      final inherited = await _inheritedShareUids(t)
+        ..addAll(parentShares[t.parentId] ?? const <String>{});
+
       await _repo.save(
         t.copyWith(
           id: _repo.generateId(),
@@ -243,7 +271,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           isDone: false,
           ownerId: '',
           ownerName: '',
-          sharedWith: '',
+          sharedWith: WeeklyShareService.uidsToJson(inherited),
           parentId: newParent,
           synced: 0,
         ),
@@ -253,7 +281,11 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('${clip.length} tareas pegadas en esta semana'),
+        content: Text(
+          sharedCount > 0
+              ? '${clip.length} tareas pegadas ($sharedCount se siguen compartiendo)'
+              : '${clip.length} tareas pegadas en esta semana',
+        ),
         backgroundColor: Colors.green.shade600,
       ),
     );

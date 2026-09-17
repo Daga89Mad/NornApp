@@ -248,6 +248,37 @@ class FunContentRepository {
     {'text': '¿Qué hace una vaca en un terremoto? ¡Leche batida!'},
     {'text': '¿Qué le dice un camello a otro? ¡Qué jorobado estás hoy!'},
     {'text': '¿Qué hace un canguro en un restaurante? Salta el menú.'},
+    {'text': '¿Cuál es el café más peligroso? El ex-preso.'},
+    {'text': '¿Qué le dijo una pared a otra pared? Nos vemos en la esquina.'},
+    {'text': '¿Cuál es el último animal que subió al arca de Noé? El del-fin.'},
+    {
+      'text':
+          '¿Qué le dice un gusano a otro gusano? Voy a dar una vuelta a la manzana.',
+    },
+    {
+      'text':
+          '¿Cuál es el animal más antiguo? La cebra, porque está en blanco y negro.',
+    },
+    {
+      'text':
+          '¿Qué le dice una pulga a otra pulga? ¿Vamos andando o esperamos al perro?',
+    },
+    {
+      'text':
+          '¿Tiene platos del día? Sí. Pues déme uno de ayer, que estará más barato.',
+    },
+    {
+      'text':
+          'Papá, ¿qué se siente al tener un hijo tan guapo? No lo sé, pregúntale a tu abuelo.',
+    },
+    {
+      'text':
+          'Papá, ¿me haces los deberes? No, hijo, eso estaría mal. Bueno, inténtalo igualmente.',
+    },
+    {
+      'text':
+          'Mamá, ¿qué haces delante del ordenador con los ojos cerrados? Windows me dijo que cerrara las pestañas.',
+    },
   ];
 
   // ── Datos: Frases ─────────────────────────────────────────────────────────────
@@ -400,6 +431,48 @@ class FunContentRepository {
           'Somos lo que hacemos repetidamente. La excelencia, entonces, no es un acto, sino un hábito.',
       'author': 'Aristóteles',
     },
+    {
+      'text':
+          'La opinión es el punto medio entre el conocimiento y la ignorancia.',
+      'author': 'Platón',
+    },
+    {
+      'text': 'Pensar es el diálogo del alma consigo misma.',
+      'author': 'Platón',
+    },
+    {
+      'text':
+          'No hay viento favorable para quien no sabe a qué puerto se dirige.',
+      'author': 'Séneca',
+    },
+    {
+      'text': 'No es pobre quien tiene poco, sino quien desea mucho.',
+      'author': 'Séneca',
+    },
+    {
+      'text': 'Sufrimos más en la imaginación que en la realidad.',
+      'author': 'Séneca',
+    },
+    {'text': 'La vida es larga si sabes cómo usarla.', 'author': 'Séneca'},
+    {
+      'text':
+          'Saber lo que sabes y saber lo que no sabes: eso es conocimiento.',
+      'author': 'Confucio',
+    },
+    {
+      'text':
+          'Si conoces al enemigo y te conoces a ti mismo, no debes temer el resultado de cien batallas.',
+      'author': 'Sun Tzu',
+    },
+    {
+      'text': 'La suprema excelencia consiste en vencer al enemigo sin luchar.',
+      'author': 'Sun Tzu',
+    },
+    {
+      'text': 'En medio del caos también existe la oportunidad.',
+      'author': 'Sun Tzu',
+    },
+    {'text': 'El conocimiento es poder.', 'author': 'Francis Bacon'},
   ];
 
   // ── Datos: Idiomas — frases hechas con pronunciación ─────────────────────────
@@ -783,6 +856,386 @@ class FunContentRepository {
       'text':
           'El idioma más antiguo escrito que aún se habla es el griego, con registros de escritura de más de 3 000 años.',
       'category': '📚 Cultura',
+    },
+    {
+      'text':
+          'Las nutrias marinas pueden cogerse de las patas mientras flotan para evitar separarse unas de otras con las corrientes.',
+      'category': '🦦 Animales',
+    },
+    {
+      'text':
+          'Los koalas tienen huellas dactilares tan parecidas a las humanas que pueden resultar difíciles de distinguir a simple vista.',
+      'category': '🐨 Animales',
+    },
+    {
+      'text':
+          'Los pulpos pueden cambiar rápidamente el color y la textura aparente de su piel para camuflarse o comunicarse.',
+      'category': '🐙 Animales',
+    },
+    {
+      'text':
+          'Los elefantes pueden comunicarse mediante sonidos de frecuencia muy baja que recorren varios kilómetros.',
+      'category': '🐘 Animales',
+    },
+    {
+      'text':
+          'Las jirafas tienen siete vértebras cervicales, el mismo número que los seres humanos, aunque cada una es mucho más larga.',
+      'category': '🦒 Animales',
+    },
+    {
+      'text':
+          'Los caballitos de mar machos son los que llevan los embriones en una bolsa incubadora y posteriormente dan a luz.',
+      'category': '🐠 Animales',
+    },
+    {
+      'text':
+          'En Mercurio, un día solar dura aproximadamente 176 días terrestres, mientras que su año dura solo unos 88 días terrestres.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'La luz del Sol tarda aproximadamente 8 minutos y 20 segundos en llegar hasta la Tierra.',
+      'category': '☀️ Espacio',
+    },
+    {
+      'text':
+          'Júpiter es tan grande que en su interior cabrían más de mil planetas del tamaño de la Tierra por volumen.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'Saturno tiene una densidad media menor que la del agua, aunque obviamente no existe un océano suficientemente grande para hacerlo flotar.',
+      'category': '🪐 Espacio',
+    },
+    {
+      'text':
+          'Marte alberga el Olympus Mons, el volcán más grande conocido del sistema solar, con más de 20 kilómetros de altura respecto a las llanuras circundantes.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'La Luna se aleja de la Tierra aproximadamente 3,8 centímetros cada año debido a las interacciones de las mareas.',
+      'category': '🌙 Espacio',
+    },
+    {
+      'text':
+          'Urano gira prácticamente tumbado: su eje de rotación está inclinado unos 98 grados respecto al plano de su órbita.',
+      'category': '🪐 Espacio',
+    },
+    {
+      'text':
+          'Neptuno posee algunos de los vientos más rápidos registrados en el sistema solar, que pueden superar los 2 000 kilómetros por hora.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'En la Luna las huellas de los astronautas pueden permanecer durante millones de años porque prácticamente no hay viento ni lluvia que las erosionen.',
+      'category': '🌙 Espacio',
+    },
+    {
+      'text':
+          'El Sol concentra aproximadamente el 99,8% de toda la masa del sistema solar.',
+      'category': '☀️ Espacio',
+    },
+    {
+      'text':
+          'Un año luz no es una medida de tiempo, sino de distancia: equivale a unos 9,46 billones de kilómetros.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'La Estación Espacial Internacional tarda aproximadamente 90 minutos en completar una vuelta alrededor de la Tierra.',
+      'category': '🚀 Espacio',
+    },
+    {
+      'text':
+          'La montaña más alta de la Tierra medida desde su base es Mauna Kea, en Hawái, si se incluye la parte que se encuentra bajo el océano.',
+      'category': '🌍 Naturaleza',
+    },
+    {
+      'text':
+          'La Antártida es técnicamente el desierto más grande del planeta porque recibe muy pocas precipitaciones.',
+      'category': '❄️ Naturaleza',
+    },
+    {
+      'text':
+          'Alrededor del 71% de la superficie de la Tierra está cubierta por agua.',
+      'category': '🌊 Naturaleza',
+    },
+    {
+      'text':
+          'La mayor parte del agua dulce de la Tierra se encuentra almacenada en glaciares, capas de hielo y aguas subterráneas.',
+      'category': '🌊 Naturaleza',
+    },
+    {
+      'text':
+          'El océano Pacífico es el océano más grande de la Tierra y ocupa una superficie mayor que todas las masas terrestres combinadas.',
+      'category': '🌊 Naturaleza',
+    },
+    {
+      'text':
+          'La fosa de las Marianas contiene el punto oceánico conocido más profundo de la Tierra, a casi 11 kilómetros bajo el nivel del mar.',
+      'category': '🌊 Naturaleza',
+    },
+    {
+      'text':
+          'Los continentes se desplazan unos pocos centímetros cada año debido al movimiento de las placas tectónicas.',
+      'category': '🌍 Naturaleza',
+    },
+    {
+      'text':
+          'Los rayos pueden calentar el aire que los rodea hasta temperaturas cercanas a los 30 000 grados Celsius durante un instante.',
+      'category': '⚡ Naturaleza',
+    },
+    {
+      'text':
+          'Un arcoíris completo tiene forma circular, aunque desde el suelo normalmente solo vemos una parte debido al horizonte.',
+      'category': '🌈 Naturaleza',
+    },
+    {
+      'text':
+          'Los copos de nieve desarrollan estructuras de seis lados debido a la forma en que se organizan las moléculas de agua al congelarse.',
+      'category': '❄️ Naturaleza',
+    },
+    {
+      'text':
+          'El olor característico que aparece después de la lluvia sobre suelo seco se conoce como petricor.',
+      'category': '🌧️ Naturaleza',
+    },
+    {
+      'text':
+          'Los árboles pueden intercambiar nutrientes y señales químicas mediante redes subterráneas en las que participan sus raíces y determinados hongos.',
+      'category': '🌳 Naturaleza',
+    },
+    {
+      'text':
+          'El cuerpo humano adulto posee normalmente 206 huesos, aunque los bebés nacen con un número mayor que posteriormente se fusiona.',
+      'category': '🧠 Cuerpo humano',
+    },
+    {
+      'text':
+          'La piel es el órgano más grande del cuerpo humano y actúa como una importante barrera frente al entorno.',
+      'category': '🧠 Cuerpo humano',
+    },
+    {
+      'text':
+          'El intestino delgado de un adulto mide aproximadamente entre 5 y 7 metros, aunque su longitud varía entre personas.',
+      'category': '🧠 Cuerpo humano',
+    },
+    {
+      'text':
+          'Los glóbulos rojos humanos maduros no tienen núcleo, lo que deja más espacio para transportar hemoglobina.',
+      'category': '🩸 Cuerpo humano',
+    },
+    {
+      'text':
+          'El esmalte dental es el tejido más duro del cuerpo humano, aunque puede deteriorarse por ácidos y desgaste.',
+      'category': '🦷 Cuerpo humano',
+    },
+    {
+      'text':
+          'El cerebro humano contiene alrededor de 86 000 millones de neuronas.',
+      'category': '🧠 Cuerpo humano',
+    },
+    {
+      'text':
+          'La Universidad de Bolonia, fundada en el siglo XI, es considerada generalmente la universidad más antigua del mundo occidental que continúa en funcionamiento.',
+      'category': '📚 Historia',
+    },
+    {
+      'text':
+          'Los vikingos llegaron a América del Norte alrededor del año 1000, varios siglos antes de los viajes de Cristóbal Colón.',
+      'category': '🏛️ Historia',
+    },
+    {
+      'text':
+          'Durante gran parte de la historia, el color púrpura fue extremadamente caro porque algunos pigmentos se obtenían a partir de miles de moluscos marinos.',
+      'category': '🏛️ Historia',
+    },
+    {
+      'text':
+          'La palabra "robot" procede del término checo "robota", relacionado históricamente con el trabajo forzado.',
+      'category': '🤖 Tecnología',
+    },
+    {
+      'text':
+          'El primer mensaje enviado a través de ARPANET en 1969 debía ser "LOGIN", pero el sistema falló después de transmitir únicamente las letras "LO".',
+      'category': '💻 Tecnología',
+    },
+    {
+      'text':
+          'El código QR fue desarrollado originalmente en Japón en la década de 1990 para rastrear componentes durante la fabricación de automóviles.',
+      'category': '📱 Tecnología',
+    },
+    {
+      'text':
+          'Bluetooth recibió su nombre del rey Harald Bluetooth, conocido por haber contribuido a unificar Dinamarca y Noruega.',
+      'category': '📱 Tecnología',
+    },
+    {
+      'text':
+          'El primer disco duro comercial de IBM, presentado en 1956, almacenaba alrededor de 5 megabytes y ocupaba un espacio comparable al de grandes armarios.',
+      'category': '💾 Tecnología',
+    },
+    {
+      'text':
+          'Una fotografía digital está formada por pequeños elementos llamados píxeles, cada uno de los cuales almacena información relacionada con el color y la luminosidad.',
+      'category': '💻 Tecnología',
+    },
+    {
+      'text':
+          'La velocidad de la luz en el vacío es de aproximadamente 299 792 kilómetros por segundo.',
+      'category': '🧪 Ciencia',
+    },
+    {
+      'text':
+          'El sonido viaja más rápido a través del agua que a través del aire porque las partículas están mucho más próximas entre sí.',
+      'category': '🧪 Ciencia',
+    },
+    {
+      'text':
+          'El diamante y el grafito están formados por carbono, pero sus átomos están organizados de maneras diferentes y por eso sus propiedades son muy distintas.',
+      'category': '🧪 Ciencia',
+    },
+    {
+      'text':
+          'La temperatura más baja posible según la física es el cero absoluto, equivalente a -273,15 grados Celsius.',
+      'category': '🧪 Ciencia',
+    },
+    {
+      'text':
+          'Los átomos están formados en su mayor parte por espacio vacío entre el núcleo y los electrones.',
+      'category': '⚛️ Ciencia',
+    },
+    {
+      'text':
+          'La tabla periódica organiza los elementos químicos principalmente según su número atómico, es decir, el número de protones de su núcleo.',
+      'category': '⚛️ Ciencia',
+    },
+    {
+      'text':
+          'El símbolo @ existía siglos antes de la creación del correo electrónico y se utilizaba en documentos comerciales.',
+      'category': '📚 Curiosidades',
+    },
+    {
+      'text':
+          'La palabra "alfabeto" procede de los nombres de las dos primeras letras griegas: alfa y beta.',
+      'category': '📚 Cultura',
+    },
+    {
+      'text':
+          'El mandarín es el idioma con mayor número de hablantes nativos del mundo.',
+      'category': '📚 Cultura',
+    },
+    {
+      'text':
+          'El español pertenece a la familia de las lenguas romances y evolucionó principalmente a partir del latín hablado en la península ibérica.',
+      'category': '📚 Cultura',
+    },
+    {
+      'text':
+          'La bandera de Nepal es la única bandera nacional moderna que no tiene forma rectangular.',
+      'category': '🌍 Curiosidades',
+    },
+    {
+      'text':
+          'Rusia se extiende por once zonas horarias, más que cualquier otro país del mundo.',
+      'category': '🌍 Geografía',
+    },
+    {
+      'text':
+          'África es el único continente atravesado tanto por el ecuador como por los dos trópicos.',
+      'category': '🌍 Geografía',
+    },
+    {
+      'text':
+          'Canadá posee una costa más larga que la de cualquier otro país del mundo.',
+      'category': '🌍 Geografía',
+    },
+    {
+      'text':
+          'El lago Baikal, en Siberia, es el lago de agua dulce más profundo del mundo y contiene alrededor de una quinta parte del agua dulce superficial no congelada del planeta.',
+      'category': '🌍 Geografía',
+    },
+    {
+      'text':
+          'La cordillera de los Andes es la cadena montañosa continental más larga del mundo y recorre gran parte del oeste de Sudamérica.',
+      'category': '🌍 Geografía',
+    },
+    {
+      'text':
+          'El Sahara no siempre fue un desierto: en diferentes periodos del pasado tuvo lagos, ríos y extensas zonas de vegetación.',
+      'category': '🌍 Historia natural',
+    },
+    {
+      'text':
+          'Los primeros seres humanos modernos aparecieron cientos de miles de años antes de que comenzara la construcción de las grandes ciudades y civilizaciones.',
+      'category': '🏛️ Historia',
+    },
+    {
+      'text':
+          'Los dinosaurios no avianos desaparecieron hace unos 66 millones de años, pero las aves actuales son descendientes directos de dinosaurios terópodos.',
+      'category': '🦖 Animales',
+    },
+    {
+      'text':
+          'El Tyrannosaurus rex vivió más cerca en el tiempo de los seres humanos actuales que del Stegosaurus.',
+      'category': '🦖 Historia natural',
+    },
+    {
+      'text':
+          'Algunas especies de medusas del género Turritopsis pueden regresar a una fase juvenil de su ciclo vital después de alcanzar la madurez.',
+      'category': '🪼 Animales',
+    },
+    {
+      'text':
+          'Los axolotes pueden regenerar extremidades y reparar partes de órganos y tejidos sin formar cicatrices como las que aparecen normalmente en los mamíferos.',
+      'category': '🦎 Animales',
+    },
+    {
+      'text':
+          'Los tardígrados pueden sobrevivir a condiciones extremas entrando en un estado de actividad metabólica extremadamente reducida llamado criptobiosis.',
+      'category': '🔬 Animales',
+    },
+    {
+      'text':
+          'Las estrellas de mar no tienen un cerebro centralizado como los vertebrados; poseen un sistema nervioso distribuido por su cuerpo.',
+      'category': '⭐ Animales',
+    },
+    {
+      'text':
+          'Las serpientes utilizan su lengua bífida para recoger partículas químicas del entorno y analizarlas mediante el órgano vomeronasal.',
+      'category': '🐍 Animales',
+    },
+    {
+      'text':
+          'Los búhos pueden girar la cabeza hasta unos 270 grados gracias a adaptaciones especiales de sus vértebras y vasos sanguíneos.',
+      'category': '🦉 Animales',
+    },
+    {
+      'text':
+          'Los pingüinos emperador machos incuban el huevo sobre sus patas durante el invierno antártico mientras las hembras regresan al océano para alimentarse.',
+      'category': '🐧 Animales',
+    },
+    {
+      'text':
+          'Los cocodrilos llevan existiendo en formas similares desde mucho antes de la extinción de los dinosaurios no avianos.',
+      'category': '🐊 Animales',
+    },
+    {
+      'text':
+          'Las vacas forman relaciones sociales y pueden mostrar preferencias claras por determinados individuos de su grupo.',
+      'category': '🐄 Animales',
+    },
+    {
+      'text':
+          'Los loros no solo pueden imitar sonidos humanos; algunas especies son capaces de asociar determinadas palabras con objetos, colores o cantidades.',
+      'category': '🦜 Animales',
+    },
+    {
+      'text':
+          'La lengua de una ballena azul puede pesar aproximadamente lo mismo que un elefante pequeño.',
+      'category': '🐋 Animales',
     },
   ];
 }
