@@ -10,6 +10,7 @@ import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
+import 'week_dates.dart';
 
 class WeeklyTaskRepository {
   WeeklyTaskRepository._();
@@ -32,12 +33,9 @@ class WeeklyTaskRepository {
   /// aplicando la fecha local (override) de las tareas compartidas que yo haya
   /// movido de día.
   Future<List<WeeklyTask>> getTasksForWeek(DateTime weekStart) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
+    final monday = mondayOf(weekStart);
     final fromMs = monday.millisecondsSinceEpoch;
-    final toMs = sunday.millisecondsSinceEpoch;
+    final toMs = endOfWeekMs(monday);
 
     final dismissed = await DismissedSharedService.instance.idsForType('tasks');
     final overrides = await SharedDateOverrideService.instance.mapForType(
@@ -270,67 +268,42 @@ class WeeklyTaskRepository {
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
+    final monday = mondayOf(weekStart);
+    final fromMs = monday.millisecondsSinceEpoch;
+    final toMs = endOfWeekMs(monday);
 
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
-    await _dismissSharedInRange(
-      monday.millisecondsSinceEpoch,
-      sunday.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   Future<void> deleteDay(DateTime day) async {
-    final midnight = DateTime(day.year, day.month, day.day);
-    final endOfDay = midnight.add(
-      const Duration(hours: 23, minutes: 59, seconds: 59),
-    );
+    final fromMs = startOfDay(day).millisecondsSinceEpoch;
+    final toMs = endOfDayMs(day);
 
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTasks,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
-    await _dismissSharedInRange(
-      midnight.millisecondsSinceEpoch,
-      endOfDay.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   /// Oculta (no borra) las tareas compartidas por otros dentro del rango.
@@ -433,10 +406,10 @@ class WeeklyTaskRepository {
   // UTILIDADES
   // ══════════════════════════════════════════════════════════════════════════
 
-  DateTime _mondayOf(DateTime date) {
-    final monday = date.subtract(Duration(days: date.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
+  /// Lunes (medianoche) de la semana de [date].
+  /// Delegado en week_dates para que sea seguro frente al cambio de hora:
+  /// Duration suma tiempo absoluto y el día del cambio tiene 23 o 25 horas.
+  DateTime _mondayOf(DateTime date) => mondayOf(date);
 
   static int _idCounter = 0;
   String generateId() =>
@@ -457,15 +430,14 @@ class WeeklyTaskRepository {
 
     final base = DateTime.fromMillisecondsSinceEpoch(task.date);
     final int count = task.recurrence == 'weekly' ? 11 : 29;
-    final Duration step = task.recurrence == 'weekly'
-        ? const Duration(days: 7)
-        : const Duration(days: 1);
+    // Días de calendario, no Duration: así las repeticiones no se desplazan
+    // una hora al cruzar el cambio de hora.
+    final int stepDays = task.recurrence == 'weekly' ? 7 : 1;
 
     for (var i = 1; i <= count; i++) {
-      final d = base.add(step * i);
       final instance = task.copyWith(
         id: generateId(),
-        date: DateTime(d.year, d.month, d.day).millisecondsSinceEpoch,
+        date: addDays(base, stepDays * i).millisecondsSinceEpoch,
         isDone: false,
         synced: 0,
       );

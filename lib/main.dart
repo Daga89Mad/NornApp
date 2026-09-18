@@ -2,6 +2,7 @@
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -44,6 +45,19 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'NornApp',
       debugShowCheckedModeBanner: false,
+
+      // ── Español fijo ─────────────────────────────────────────────────────
+      // Con el locale es_ES, los calendarios nativos (showDatePicker) salen en
+      // español y la semana empieza en LUNES (firstDayOfWeekIndex = 1). Sin
+      // esto, Flutter usa en_US: cabeceras S M T W T F S y semana en domingo.
+      locale: const Locale('es', 'ES'),
+      supportedLocales: const [Locale('es', 'ES'), Locale('es'), Locale('en')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+
       theme: ThemeData(
         brightness: Brightness.light,
         primarySwatch: Colors.blue,

@@ -10,6 +10,7 @@ import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
+import 'week_dates.dart';
 
 class WeeklyMenuRepository {
   WeeklyMenuRepository._();
@@ -29,14 +30,8 @@ class WeeklyMenuRepository {
   // ══════════════════════════════════════════════════════════════════════════
 
   Future<List<WeeklyMenuEntry>> getEntriesForWeek(DateTime weekStart) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
-    return _queryRange(
-      monday.millisecondsSinceEpoch,
-      sunday.millisecondsSinceEpoch,
-    );
+    final monday = mondayOf(weekStart);
+    return _queryRange(monday.millisecondsSinceEpoch, endOfWeekMs(monday));
   }
 
   /// Devuelve todos los menús (propios y compartidos conmigo) cuyo día cae
@@ -222,71 +217,46 @@ class WeeklyMenuRepository {
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
+    final monday = mondayOf(weekStart);
+    final fromMs = monday.millisecondsSinceEpoch;
+    final toMs = endOfWeekMs(monday);
 
     // 1) Míos → borrado real (local + Firebase)
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
     // 2) Compartidos conmigo → solo ocultar
-    await _dismissSharedInRange(
-      monday.millisecondsSinceEpoch,
-      sunday.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   Future<void> deleteDay(DateTime day) async {
-    final midnight = DateTime(day.year, day.month, day.day);
-    final endOfDay = midnight.add(
-      const Duration(hours: 23, minutes: 59, seconds: 59),
-    );
+    final fromMs = startOfDay(day).millisecondsSinceEpoch;
+    final toMs = endOfDayMs(day);
 
     // 1) Míos → borrado real
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyMenus,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
     // 2) Compartidos conmigo → solo ocultar
-    await _dismissSharedInRange(
-      midnight.millisecondsSinceEpoch,
-      endOfDay.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   /// Oculta (no borra) los menús compartidos por otros dentro del rango.
@@ -403,10 +373,10 @@ class WeeklyMenuRepository {
   // UTILIDADES
   // ══════════════════════════════════════════════════════════════════════════
 
-  DateTime _mondayOf(DateTime date) {
-    final monday = date.subtract(Duration(days: date.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
+  /// Lunes (medianoche) de la semana de [date].
+  /// Delegado en week_dates para que sea seguro frente al cambio de hora:
+  /// Duration suma tiempo absoluto y el día del cambio tiene 23 o 25 horas.
+  DateTime _mondayOf(DateTime date) => mondayOf(date);
 
   static int _idCounter = 0;
   String generateId() =>

@@ -11,6 +11,7 @@ import 'weekly_share_service.dart';
 import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
+import 'week_dates.dart';
 
 class WeeklyTrainingRepository {
   WeeklyTrainingRepository._();
@@ -34,12 +35,9 @@ class WeeklyTrainingRepository {
   Future<List<WeeklyTrainingEntry>> getEntriesForWeek(
     DateTime weekStart,
   ) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
+    final monday = mondayOf(weekStart);
     final fromMs = monday.millisecondsSinceEpoch;
-    final toMs = sunday.millisecondsSinceEpoch;
+    final toMs = endOfWeekMs(monday);
 
     final dismissed = await DismissedSharedService.instance.idsForType(
       'trainings',
@@ -245,67 +243,42 @@ class WeeklyTrainingRepository {
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
-    final monday = _mondayOf(weekStart);
-    final sunday = monday.add(
-      const Duration(days: 6, hours: 23, minutes: 59, seconds: 59),
-    );
+    final monday = mondayOf(weekStart);
+    final fromMs = monday.millisecondsSinceEpoch;
+    final toMs = endOfWeekMs(monday);
 
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        monday.millisecondsSinceEpoch,
-        sunday.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
-    await _dismissSharedInRange(
-      monday.millisecondsSinceEpoch,
-      sunday.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   Future<void> deleteDay(DateTime day) async {
-    final midnight = DateTime(day.year, day.month, day.day);
-    final endOfDay = midnight.add(
-      const Duration(hours: 23, minutes: 59, seconds: 59),
-    );
+    final fromMs = startOfDay(day).millisecondsSinceEpoch;
+    final toMs = endOfDayMs(day);
 
     final mine = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTrainings,
       where: 'date >= ? AND date <= ? AND owner_id = ?',
-      whereArgs: [
-        midnight.millisecondsSinceEpoch,
-        endOfDay.millisecondsSinceEpoch,
-        _uid,
-      ],
+      whereArgs: [fromMs, toMs, _uid],
     );
     for (final row in mine) _deleteFromFirebase(row['id'] as String);
 
-    await _dismissSharedInRange(
-      midnight.millisecondsSinceEpoch,
-      endOfDay.millisecondsSinceEpoch,
-    );
+    await _dismissSharedInRange(fromMs, toMs);
   }
 
   /// Oculta (no borra) los entrenamientos compartidos por otros en el rango.
@@ -509,10 +482,10 @@ class WeeklyTrainingRepository {
   // UTILIDADES
   // ══════════════════════════════════════════════════════════════════════════
 
-  DateTime _mondayOf(DateTime date) {
-    final monday = date.subtract(Duration(days: date.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
+  /// Lunes (medianoche) de la semana de [date].
+  /// Delegado en week_dates para que sea seguro frente al cambio de hora:
+  /// Duration suma tiempo absoluto y el día del cambio tiene 23 o 25 horas.
+  DateTime _mondayOf(DateTime date) => mondayOf(date);
 
   static int _idCounter = 0;
   String generateId() =>

@@ -215,6 +215,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   // ── Data ───────────────────────────────────────────────────────────────────
 
   Future<void> _loadMonth(DateTime month) async {
+    if (!mounted) return;
     setState(() => _eventsLoading = true);
     try {
       final results = await Future.wait([
@@ -907,7 +908,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
     required double height,
     required bool compact,
   }) {
-    final isInMonth = date.month == _focusedMonth.month;
+    final isInMonth =
+        date.month == _focusedMonth.month && date.year == _focusedMonth.year;
     final events = _eventsForDay(date);
     final shifts = _shiftsForDay(date);
     final sharedShifts = _sharedShiftsForDay(date);

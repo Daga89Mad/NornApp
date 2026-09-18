@@ -10,6 +10,11 @@ dependencies:
   flutter:
     sdk: flutter
 
+  # Localización (español + semana que empieza en lunes en los calendarios)
+  flutter_localizations:
+    sdk: flutter
+  intl: any
+
   # Firebase
   firebase_core:        ^4.0.0
   firebase_auth:        ^6.1.4

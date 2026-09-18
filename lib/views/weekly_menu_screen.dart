@@ -11,6 +11,8 @@ import '../core/date_change_service.dart';
 import 'shopping_list_screen.dart';
 import 'share_weekly_dialog.dart';
 import 'date_change_prompt.dart';
+import 'week_day_picker.dart';
+import '../core/week_dates.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
 const _diasSemana = [
@@ -42,7 +44,7 @@ const _diasCortos = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 String _fmtShort(DateTime d) => '${d.day} ${_meses[d.month]}';
 String _fmtMedium(DateTime d) => '${_diasCortos[d.weekday - 1]} ${d.day}';
 String _fmtWeekRange(DateTime monday) {
-  final sunday = monday.add(const Duration(days: 6));
+  final sunday = addDays(monday, 6);
   return '${_fmtShort(monday)} – ${_fmtShort(sunday)}';
 }
 
@@ -109,10 +111,9 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     if (answered && mounted) _loadWeek();
   }
 
-  DateTime _mondayOf(DateTime d) {
-    final monday = d.subtract(Duration(days: d.weekday - 1));
-    return DateTime(monday.year, monday.month, monday.day);
-  }
+  /// Lunes (medianoche) de la semana de [d].
+  /// Delegado en week_dates para que sea seguro frente al cambio de hora.
+  DateTime _mondayOf(DateTime d) => mondayOf(d);
 
   Future<void> _loadWeek() async {
     setState(() => _isLoading = true);
@@ -134,7 +135,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   void _openShoppingList() {
     // Usa el mes del jueves de la semana visible como "mes de la semana",
     // así una semana a caballo entre dos meses se asigna al mes mayoritario.
-    final reference = _currentWeekStart.add(const Duration(days: 3));
+    final reference = addDays(_currentWeekStart, 3);
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ShoppingListScreen(initialMonth: reference),
@@ -142,19 +143,18 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     );
   }
 
+  // IMPORTANTE: se usa addDays (aritmética de calendario) y NO
+  // Duration(days: 7). Duration suma 168 horas exactas y el día del cambio de
+  // hora tiene 23 o 25, así que al cruzarlo _currentWeekStart dejaba de caer en
+  // lunes a medianoche (pasaba a domingo 23:00) y la pantalla cargaba una
+  // semana distinta de la que pintaba.
   void _prevWeek() {
-    setState(
-      () => _currentWeekStart = _currentWeekStart.subtract(
-        const Duration(days: 7),
-      ),
-    );
+    setState(() => _currentWeekStart = addDays(_currentWeekStart, -7));
     _loadWeek();
   }
 
   void _nextWeek() {
-    setState(
-      () => _currentWeekStart = _currentWeekStart.add(const Duration(days: 7)),
-    );
+    setState(() => _currentWeekStart = addDays(_currentWeekStart, 7));
     _loadWeek();
   }
 
@@ -244,13 +244,16 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     final source = _clipboardSourceMonday;
     if (clip == null || source == null) return;
 
-    final offsetDays = _currentWeekStart.difference(source).inDays;
+    // daysBetween ignora horas y DST: difference().inDays daría 6 días
+    // en una semana con cambio de hora.
+    final offsetDays = daysBetween(source, _currentWeekStart);
     int sharedCount = 0;
 
     for (final e in clip) {
-      final newDate = DateTime.fromMillisecondsSinceEpoch(
-        e.date,
-      ).add(Duration(days: offsetDays));
+      final newDate = addDays(
+        DateTime.fromMillisecondsSinceEpoch(e.date),
+        offsetDays,
+      );
 
       // La copia es mía, pero conserva con quién estaba compartido el original.
       final inherited = await _inheritedShareUids(e);
@@ -258,11 +261,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
 
       final copy = e.copyWith(
         id: _repo.generateId(),
-        date: DateTime(
-          newDate.year,
-          newDate.month,
-          newDate.day,
-        ).millisecondsSinceEpoch,
+        date: newDate.millisecondsSinceEpoch,
         ownerId: '',
         ownerName: '',
         sharedWith: WeeklyShareService.uidsToJson(inherited),
@@ -323,28 +322,14 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                     style: TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    children: List.generate(7, (i) {
-                      final day = _currentWeekStart.add(Duration(days: i));
-                      final dayName = _fmtMedium(day);
-                      final isSelected =
-                          DateTime(day.year, day.month, day.day) ==
-                          DateTime(
-                            selectedDay.year,
-                            selectedDay.month,
-                            selectedDay.day,
-                          );
-                      return ChoiceChip(
-                        label: Text(
-                          dayName,
-                          style: const TextStyle(fontSize: 12),
-                        ),
-                        selected: isSelected,
-                        selectedColor: _accent.withOpacity(0.3),
-                        onSelected: (_) => setS(() => selectedDay = day),
-                      );
-                    }),
+                  // Selector de día seguro frente al cambio de hora y con
+                  // acceso al calendario completo ("Otra fecha…"), para poder
+                  // crear en cualquier semana sin navegar con las flechas.
+                  WeekDayPicker(
+                    weekStart: _currentWeekStart,
+                    selectedDay: selectedDay,
+                    accent: _accent,
+                    onChanged: (d) => setS(() => selectedDay = d),
                   ),
                   const SizedBox(height: 14),
                   const Text(
@@ -412,6 +397,10 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                 );
                 await _repo.save(entry);
                 if (ctx.mounted) Navigator.pop(ctx);
+                // Si se ha creado en otra semana, saltamos a ella para verla.
+                if (mounted) {
+                  setState(() => _currentWeekStart = _mondayOf(selectedDay));
+                }
                 _loadWeek();
               },
               child: const Text(
@@ -454,7 +443,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                 Wrap(
                   spacing: 6,
                   children: List.generate(7, (i) {
-                    final day = _currentWeekStart.add(Duration(days: i));
+                    final day = addDays(_currentWeekStart, i);
                     final dayName = _fmtMedium(day);
                     final isSelected =
                         DateTime(day.year, day.month, day.day) ==
@@ -1061,7 +1050,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
       itemCount: 7,
       itemBuilder: (ctx, index) {
-        final day = _currentWeekStart.add(Duration(days: index));
+        final day = addDays(_currentWeekStart, index);
         final dayEntries = _entriesForDay(day);
         final isToday = _isToday(day);
         return _DayCard(
