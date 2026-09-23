@@ -1,6 +1,6 @@
 // lib/main.dart
 import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show kIsWeb, kReleaseMode, defaultTargetPlatform, TargetPlatform, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -10,11 +10,20 @@ import 'package:sqflite/sqflite.dart';
 import 'firebase_options.dart';
 import 'core/alarm_service.dart';
 import 'core/push_notification_service.dart';
-import 'views/loginbody.dart';
+import 'core/monetization/consent_service.dart';
+import 'core/monetization/premium_service.dart';
+import 'views/loginBody.dart';
 import 'views/menu.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // SEGURIDAD: debugPrint SÍ escribe en el log del sistema en release
+  // (Logcat / Consola de macOS). La app imprime uids, emails, rutas de la BD
+  // y payloads de notificaciones, así que en release se silencia.
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
 
   // sqflite FFI para escritorio
   if (!kIsWeb &&
@@ -35,6 +44,13 @@ void main() async {
   await PushNotificationService.instance.init();
 
   runApp(const MyApp());
+
+  // Monetización: con la app ya en pantalla (el formulario de consentimiento
+  // y el aviso ATT de iOS necesitan una vista activa). No bloquea el arranque.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    PremiumService.instance.init();
+    ConsentService.instance.gatherConsentAndInitAds();
+  });
 }
 
 class MyApp extends StatelessWidget {

@@ -11,6 +11,7 @@ import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
 import 'week_dates.dart';
+import 'recurrence_rule.dart';
 
 class WeeklyTaskRepository {
   WeeklyTaskRepository._();
@@ -422,27 +423,44 @@ class WeeklyTaskRepository {
     return '[${list.map((e) => '"$e"').join(',')}]';
   }
 
-  /// Crea la tarea y, si es recurrente, genera instancias futuras.
-  /// 'weekly' → 12 semanas; 'daily' → 30 días.
-  Future<void> saveWithRecurrence(WeeklyTask task) async {
-    await save(task);
-    if (task.recurrence == 'none') return;
+  /// Crea la tarea y, si es recurrente, genera una copia por cada fecha de
+  /// la regla: cada día, cada semana, cada 2 semanas, cada mes o cada X días,
+  /// desde la fecha de la tarea hasta rule.until.
+  ///
+  /// Si no se pasa [rule] se interpreta task.recurrence (compatibilidad con
+  /// los valores antiguos 'daily' / 'weekly').
+  /// Devuelve cuántas tareas se han creado en total.
+  Future<int> saveWithRecurrence(
+    WeeklyTask task, [
+    RecurrenceRule? rule,
+  ]) async {
+    final r = rule ?? RecurrenceRule.decode(task.recurrence);
+    final base = task.copyWith(recurrence: r.encode());
+    await save(base);
+    if (r.isNone) return 1;
 
-    final base = DateTime.fromMillisecondsSinceEpoch(task.date);
-    final int count = task.recurrence == 'weekly' ? 11 : 29;
-    // Días de calendario, no Duration: así las repeticiones no se desplazan
-    // una hora al cruzar el cambio de hora.
-    final int stepDays = task.recurrence == 'weekly' ? 7 : 1;
+    final dates = r
+        .occurrences(DateTime.fromMillisecondsSinceEpoch(task.date))
+        .skip(1) // la primera es la propia tarea
+        .toList();
 
-    for (var i = 1; i <= count; i++) {
-      final instance = task.copyWith(
-        id: generateId(),
-        date: addDays(base, stepDays * i).millisecondsSinceEpoch,
-        isDone: false,
-        synced: 0,
+    const chunk = 8;
+    for (var i = 0; i < dates.length; i += chunk) {
+      final slice = dates.skip(i).take(chunk);
+      await Future.wait(
+        slice.map(
+          (d) => save(
+            base.copyWith(
+              id: generateId(),
+              date: d.millisecondsSinceEpoch,
+              isDone: false,
+              synced: 0,
+            ),
+          ),
+        ),
       );
-      await save(instance);
     }
+    return dates.length + 1;
   }
 
   /// Mueve una tarea a otro día. Arrastra sus subtareas.

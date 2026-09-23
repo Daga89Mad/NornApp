@@ -25,18 +25,55 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 
+	<!-- ── Cumplimiento de exportación (cifrado) ──
+	     La app solo usa el cifrado que ya trae iOS o que va dentro de
+	     HTTPS/TLS (Firebase) y el Keychain. Eso está EXENTO, así que se
+	     declara NO. Con esta clave App Store Connect deja de preguntar
+	     por el cifrado en cada build que subes. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
+	<!-- ── AdMob ──
+	     App ID de iOS (con '~'). ⚠️ Sustituye por el tuyo: AdMob → Apps →
+	     NornApp (iOS) → Configuración de la app. Si falta, la app se cierra
+	     al arrancar. Este es el ID de PRUEBA de Google. -->
+	<key>GADApplicationIdentifier</key>
+	<string>ca-app-pub-3940256099942544~1458002511</string>
+
+	<!-- ── App Tracking Transparency (anuncios personalizados) ──
+	     Texto del aviso del sistema. Debe explicar para qué se usa, sin
+	     presionar ni ofrecer nada a cambio (Apple lo rechaza). -->
+	<key>NSUserTrackingUsageDescription</key>
+	<string>Si lo permites, los anuncios que ves en NornApp serán más relevantes para ti. Si no, seguirás viendo anuncios, pero menos personalizados.</string>
+
+	<!-- ── SKAdNetwork ──
+	     Google + compradores externos. Google publica la lista completa y
+	     actualizada en: developers.google.com/admob/ios/3p-skadnetworks
+	     Copia allí el bloque entero para no perder ingresos. -->
+	<key>SKAdNetworkItems</key>
+	<array>
+		<dict>
+			<key>SKAdNetworkIdentifier</key>
+			<string>cstr6suwn9.skadnetwork</string>
+		</dict>
+	</array>
+<!-- ── Galería de fotos ── -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>NornApp necesita acceso a tus fotos para que puedas elegir una imagen de perfil desde la galería.</string>
+
 	<!-- ── Permisos de cámara (QR scanner) ── -->
 	<key>NSCameraUsageDescription</key>
-	<string>NornApp necesita acceder a la cámara para escanear códigos QR de otros usuarios.</string>
+	<string>NornApp usa la cámara únicamente para escanear el código QR de otro usuario y añadirlo como amigo. Las imágenes no se guardan ni se envían.</string>
 
-	<!-- ── Notificaciones push y alarmas ── -->
+	<!-- ── Notificaciones push ──
+	     Solo 'remote-notification'. Se ha quitado 'fetch' porque la app no
+	     usa Background Fetch y Apple puede rechazar modos que no se usan. -->
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>fetch</string>
 		<string>remote-notification</string>
 	</array>
 
-	<!-- ── Alarmas con pantalla bloqueada (flutter_local_notifications) ── -->
+	<!-- Requerido por Flutter para gestos de trackpad/ratón en iPad -->
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 

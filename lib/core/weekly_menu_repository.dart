@@ -11,6 +11,7 @@ import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
 import 'week_dates.dart';
+import 'recurrence_rule.dart';
 
 class WeeklyMenuRepository {
   WeeklyMenuRepository._();
@@ -187,6 +188,39 @@ class WeeklyMenuRepository {
       toSave.toMap(),
     );
     _pushToFirebase(toSave, merged.toList());
+  }
+
+  /// Guarda el menú y, si [rule] se repite, crea una copia por cada fecha de
+  /// la regla (desde la fecha del entry hasta rule.until).
+  /// Devuelve cuántos se han creado en total.
+  Future<int> saveWithRecurrence(
+    WeeklyMenuEntry entry,
+    RecurrenceRule rule,
+  ) async {
+    await save(entry);
+    if (rule.isNone) return 1;
+
+    final dates = rule
+        .occurrences(DateTime.fromMillisecondsSinceEpoch(entry.date))
+        .skip(1) // la primera es el propio entry
+        .toList();
+
+    const chunk = 8;
+    for (var i = 0; i < dates.length; i += chunk) {
+      final slice = dates.skip(i).take(chunk);
+      await Future.wait(
+        slice.map(
+          (d) => save(
+            entry.copyWith(
+              id: generateId(),
+              date: d.millisecondsSinceEpoch,
+              synced: 0,
+            ),
+          ),
+        ),
+      );
+    }
+    return dates.length + 1;
   }
 
   Future<void> delete(String id) async {

@@ -12,6 +12,8 @@ class WeeklyTrainingEntry {
   final String ownerName; // nombre del dueño para mostrar en items compartidos
   final String sharedWith; // JSON-encoded list de UIDs, p.ej. '["uid1","uid2"]'
   final int synced;
+  // Imagen opcional (JPEG comprimido en base64). '' = sin imagen.
+  final String imageData;
 
   const WeeklyTrainingEntry({
     required this.id,
@@ -24,7 +26,10 @@ class WeeklyTrainingEntry {
     this.ownerName = '',
     this.sharedWith = '',
     this.synced = 0,
+    this.imageData = '',
   });
+
+  bool get hasImage => imageData.isNotEmpty;
 
   factory WeeklyTrainingEntry.fromMap(Map<String, dynamic> m) =>
       WeeklyTrainingEntry(
@@ -38,6 +43,7 @@ class WeeklyTrainingEntry {
         ownerName: (m['owner_name'] as String?) ?? '',
         sharedWith: (m['shared_with'] as String?) ?? '',
         synced: (m['synced'] as int?) ?? 0,
+        imageData: (m['image_data'] as String?) ?? '',
       );
 
   Map<String, dynamic> toMap() => {
@@ -51,6 +57,7 @@ class WeeklyTrainingEntry {
     'owner_name': ownerName,
     'shared_with': sharedWith,
     'synced': synced,
+    'image_data': imageData,
   };
 
   WeeklyTrainingEntry copyWith({
@@ -64,6 +71,7 @@ class WeeklyTrainingEntry {
     String? ownerName,
     String? sharedWith,
     int? synced,
+    String? imageData,
   }) => WeeklyTrainingEntry(
     id: id ?? this.id,
     date: date ?? this.date,
@@ -75,6 +83,7 @@ class WeeklyTrainingEntry {
     ownerName: ownerName ?? this.ownerName,
     sharedWith: sharedWith ?? this.sharedWith,
     synced: synced ?? this.synced,
+    imageData: imageData ?? this.imageData,
   );
 
   bool isSharedFromOther(String myUid) =>

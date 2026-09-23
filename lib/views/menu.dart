@@ -10,7 +10,10 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:nornapp/views/calendar_screen.dart';
-import 'package:nornapp/views/LoginBody.dart';
+import 'package:nornapp/views/loginBody.dart';
+import 'package:nornapp/views/account_settings_screen.dart';
+import 'package:nornapp/core/account_service.dart';
+import 'package:nornapp/views/premium/banner_ad_widget.dart';
 import 'package:nornapp/views/shifts_screen.dart';
 import 'package:nornapp/views/friends_screen.dart';
 import 'package:nornapp/views/qr_share_screen.dart';
@@ -111,11 +114,20 @@ class _MenuScreenState extends State<MenuScreen> {
   }
 
   Future<void> _signOutAndGoToLogin(BuildContext context) async {
-    await FirebaseAuth.instance.signOut();
+    // Antes solo se hacía FirebaseAuth.signOut(): los listeners seguían
+    // activos y el móvil seguía recibiendo los push del usuario anterior.
+    await AccountService.instance.signOut();
+    if (!context.mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (_) => const LoginBody()),
       (route) => false,
     );
+  }
+
+  void _openAccountSettings() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const AccountSettingsScreen()));
   }
 
   void _openCalendar() {
@@ -214,7 +226,11 @@ class _MenuScreenState extends State<MenuScreen> {
       label: 'Compartir usuario (QR)',
       onTap: _openQrShare,
     ),
-    _MenuItemData(icon: Icons.settings, label: 'Ajustes', onTap: () {}),
+    _MenuItemData(
+      icon: Icons.settings,
+      label: 'Ajustes',
+      onTap: _openAccountSettings,
+    ),
     _MenuItemData(
       icon: Icons.logout,
       label: 'Logout',
@@ -304,6 +320,8 @@ class _MenuScreenState extends State<MenuScreen> {
 
     return Scaffold(
       backgroundColor: palette.background,
+      // Banner discreto abajo (desaparece solo con Premium o sin consentimiento)
+      bottomNavigationBar: const BannerAdWidget(),
       appBar: AppBar(
         elevation: 0,
         backgroundColor: palette.background,
@@ -342,7 +360,7 @@ class _MenuScreenState extends State<MenuScreen> {
             children: [
               const SizedBox(height: 8),
               _ProfileHeader(
-                onEditProfile: () {},
+                onEditProfile: _openAccountSettings,
                 onQuickCalendar: _openCalendar,
                 onOpenFun: _openFunSheet, // ← NUEVO
                 palette: palette,

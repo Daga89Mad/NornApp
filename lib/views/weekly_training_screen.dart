@@ -10,6 +10,9 @@ import 'date_change_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/week_dates.dart';
 import '../core/weekly_share_service.dart';
+import '../core/recurrence_rule.dart';
+import 'recurrence_picker.dart';
+import 'image_helpers.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
 const _diasSemana = [
@@ -116,10 +119,19 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
   /// Delegado en week_dates para que sea seguro frente al cambio de hora.
   DateTime _mondayOf(DateTime d) => mondayOf(d);
 
-  Future<void> _loadWeek() async {
-    setState(() => _isLoading = true);
+  // Evita que una carga antigua pise a una más reciente.
+  int _loadToken = 0;
+
+  /// Recarga la semana.
+  ///
+  /// [showSpinner] solo al CAMBIAR de semana. En el resto de recargas
+  /// (marcar completado, cambios que llegan de Firebase…) no se muestra el
+  /// spinner para que la lista no se reconstruya y el scroll no salte.
+  Future<void> _loadWeek({bool showSpinner = false}) async {
+    final token = ++_loadToken;
+    if (showSpinner && mounted) setState(() => _isLoading = true);
     final entries = await _repo.getEntriesForWeek(_currentWeekStart);
-    if (!mounted) return;
+    if (!mounted || token != _loadToken) return;
     setState(() {
       _entries = entries;
       _isLoading = false;
@@ -143,12 +155,12 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
   // semana distinta de la que pintaba.
   void _prevWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, -7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   void _nextWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, 7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   String _weekLabel() => _fmtWeekRange(_currentWeekStart);
@@ -287,11 +299,15 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     String trainingType = WeeklyTrainingEntry.trainingTypes.first;
+    RecurrenceRule rule = RecurrenceRule.none;
+    String imageData = '';
+    bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
 
     await showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
           insetPadding: const EdgeInsets.symmetric(
@@ -359,45 +375,86 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                     maxLines: 6,
                     textCapitalization: TextCapitalization.sentences,
                   ),
+                  const SizedBox(height: 12),
+                  _TrainingImageField(
+                    imageData: imageData,
+                    heroTag: 'training_img_new',
+                    accent: _primary,
+                    onChanged: (v) => setS(() => imageData = v),
+                  ),
+                  const SizedBox(height: 12),
+                  RecurrencePicker(
+                    startDate: selectedDay,
+                    accent: _accent,
+                    onChanged: (r) => rule = r,
+                  ),
                 ],
               ),
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: saving ? null : () => Navigator.pop(ctx),
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _primary),
-              onPressed: () async {
-                final title = titleCtrl.text.trim();
-                if (title.isEmpty) return;
-                final entry = WeeklyTrainingEntry(
-                  id: _repo.generateId(),
-                  date: DateTime(
-                    selectedDay.year,
-                    selectedDay.month,
-                    selectedDay.day,
-                  ).millisecondsSinceEpoch,
-                  trainingType: trainingType,
-                  title: title,
-                  description: descCtrl.text.trim(),
-                  isDone: false,
-                  ownerId: '',
-                );
-                await _repo.save(entry);
-                if (ctx.mounted) Navigator.pop(ctx);
-                // Si se ha creado en otra semana, saltamos a ella para verla.
-                if (mounted) {
-                  setState(() => _currentWeekStart = _mondayOf(selectedDay));
-                }
-                _loadWeek();
-              },
-              child: const Text(
-                'Guardar',
-                style: TextStyle(color: Colors.white),
-              ),
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final title = titleCtrl.text.trim();
+                      if (title.isEmpty) return;
+                      setS(() => saving = true);
+                      final entry = WeeklyTrainingEntry(
+                        id: _repo.generateId(),
+                        date: DateTime(
+                          selectedDay.year,
+                          selectedDay.month,
+                          selectedDay.day,
+                        ).millisecondsSinceEpoch,
+                        trainingType: trainingType,
+                        title: title,
+                        description: descCtrl.text.trim(),
+                        isDone: false,
+                        ownerId: '',
+                        imageData: imageData,
+                      );
+                      final created = await _repo.saveWithRecurrence(
+                        entry,
+                        rule,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (!mounted) return;
+                      if (created > 1) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('$created entrenamientos creados'),
+                            backgroundColor: Colors.green.shade600,
+                          ),
+                        );
+                      }
+                      // Si se ha creado en otra semana, saltamos a ella.
+                      final newMonday = _mondayOf(selectedDay);
+                      final changedWeek = !isSameDay(
+                        newMonday,
+                        _currentWeekStart,
+                      );
+                      setState(() => _currentWeekStart = newMonday);
+                      _loadWeek(showSpinner: changedWeek);
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Guardar',
+                      style: TextStyle(color: Colors.white),
+                    ),
             ),
           ],
         ),
@@ -491,6 +548,7 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
     final descCtrl = TextEditingController(text: entry.description);
     String trainingType = entry.trainingType;
     bool isDone = entry.isDone;
+    String imageData = entry.imageData;
     final bool isForeign = entry.isSharedFromOther(_myUid);
 
     await showDialog(
@@ -600,6 +658,16 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                     minLines: 5,
                     maxLines: 12,
                   ),
+                  const SizedBox(height: 12),
+                  // Imagen: el dueño puede cambiarla; si es compartida solo
+                  // se puede ver (pulsando se abre en grande).
+                  _TrainingImageField(
+                    imageData: imageData,
+                    heroTag: 'training_img_edit_${entry.id}',
+                    accent: _primary,
+                    readOnly: isForeign,
+                    onChanged: (v) => setS(() => imageData = v),
+                  ),
                 ],
               ),
             ),
@@ -641,6 +709,7 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                         : descCtrl.text.trim(),
                     trainingType: isForeign ? entry.trainingType : trainingType,
                     isDone: isDone,
+                    imageData: isForeign ? entry.imageData : imageData,
                     synced: 0,
                   ),
                 );
@@ -937,6 +1006,10 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
     final totalAll = _entries.length;
 
     return ListView.builder(
+      // La clave por semana conserva la posición del scroll al recargar.
+      key: PageStorageKey<String>(
+        'trainings_${_currentWeekStart.millisecondsSinceEpoch}',
+      ),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
       itemCount: 8, // 7 días + 1 resumen al inicio
       itemBuilder: (ctx, index) {
@@ -959,12 +1032,19 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
           onAddTap: () => _showCreateDialog(preselectedDay: day),
           onEntryTap: _showEditDialog,
           onToggle: (e) async {
+            // Cambio optimista: se pinta al instante sin recargar la lista.
+            setState(() {
+              _entries = [
+                for (final x in _entries)
+                  x.id == e.id ? x.copyWith(isDone: !e.isDone) : x,
+              ];
+            });
             try {
               await _repo.toggleDone(e);
             } catch (err) {
               debugPrint('❌ toggleDone falló: $err');
             }
-            if (mounted) _loadWeek();
+            if (mounted) _loadWeek(); // recarga silenciosa (sin spinner)
           },
           typeColor: _typeColor,
           typeIcon: _typeIcon,
@@ -1233,7 +1313,7 @@ class _TrainingDayCard extends StatelessWidget {
     final shared = e.isSharedFromOther(myUid);
 
     return ListTile(
-      isThreeLine: e.description.isNotEmpty,
+      isThreeLine: e.description.isNotEmpty || e.hasImage,
       titleAlignment: ListTileTitleAlignment.top,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
       // Casilla de completado (como en tareas) + icono de tipo.
@@ -1305,17 +1385,35 @@ class _TrainingDayCard extends StatelessWidget {
         maxLines: 4,
         overflow: TextOverflow.ellipsis,
       ),
-      subtitle: e.description.isNotEmpty
+      subtitle: (e.description.isNotEmpty || e.hasImage)
           ? Padding(
               padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                e.description,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: e.isDone ? Colors.grey.shade400 : null,
-                ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (e.description.isNotEmpty)
+                    Text(
+                      e.description,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: e.isDone ? Colors.grey.shade400 : null,
+                      ),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  // Miniatura: al pulsarla se abre a pantalla completa.
+                  if (e.hasImage)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Base64Thumb(
+                        base64Data: e.imageData,
+                        heroTag: 'training_img_${e.id}',
+                        width: 120,
+                        height: 80,
+                      ),
+                    ),
+                ],
               ),
             )
           : null,
@@ -1335,6 +1433,83 @@ class _TrainingDayCard extends StatelessWidget {
         ),
       ),
       onTap: () => onEntryTap(e),
+    );
+  }
+}
+
+/// Campo de imagen para los diálogos de crear/editar entrenamiento.
+/// Muestra la miniatura (pulsar = ver en grande) y los botones de
+/// añadir / cambiar / quitar.
+class _TrainingImageField extends StatelessWidget {
+  final String imageData;
+  final String heroTag;
+  final Color accent;
+  final bool readOnly;
+  final ValueChanged<String> onChanged;
+
+  const _TrainingImageField({
+    required this.imageData,
+    required this.heroTag,
+    required this.accent,
+    required this.onChanged,
+    this.readOnly = false,
+  });
+
+  Future<void> _pick(BuildContext context) async {
+    final bytes = await pickCompressedImage(context);
+    if (bytes != null) onChanged(Base64ImageCache.encode(bytes));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = imageData.isNotEmpty;
+    if (readOnly && !hasImage) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('Imagen', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        if (hasImage)
+          Base64Thumb(
+            base64Data: imageData,
+            heroTag: heroTag,
+            width: double.infinity,
+            height: 160,
+          ),
+        if (hasImage)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              'Pulsa la imagen para verla en grande',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+            ),
+          ),
+        if (!readOnly)
+          Wrap(
+            spacing: 8,
+            children: [
+              TextButton.icon(
+                style: TextButton.styleFrom(foregroundColor: accent),
+                onPressed: () => _pick(context),
+                icon: Icon(
+                  hasImage ? Icons.swap_horiz : Icons.add_photo_alternate,
+                ),
+                label: Text(hasImage ? 'Cambiar imagen' : 'Añadir imagen'),
+              ),
+              if (hasImage)
+                TextButton.icon(
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.redAccent,
+                  ),
+                  onPressed: () => onChanged(''),
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('Quitar'),
+                ),
+            ],
+          ),
+      ],
     );
   }
 }

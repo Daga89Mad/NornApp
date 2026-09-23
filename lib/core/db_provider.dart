@@ -1,5 +1,15 @@
 // lib/core/db_provider.dart
+//
+// SEGURIDAD: cada usuario tiene su PROPIA base de datos local
+// (nornapp_<uid>.db). Así, si en el mismo móvil cierra sesión un usuario y
+// entra otro, el segundo no ve los eventos "solo para mí", amigos, turnos...
+// del primero, y no hace falta borrar nada al hacer logout.
+//
+// Migración: la antigua 'family_calendar.db' (compartida) se renombra al
+// primer usuario que inicie sesión con esta versión.
 import 'dart:async';
+import 'dart:io';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -9,20 +19,63 @@ import 'db_schema.dart';
 class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
-  static const String _dbName = 'family_calendar.db';
+  static const String _legacyDbName = 'family_calendar.db';
   static const int _dbVersion = DBSchema.version; // 23
   Database? _database;
+  String? _openedForUid;
+
+  // Evita abrir la BD varias veces si llegan llamadas en paralelo
+  // (p.ej. Future.wait en FirebaseSyncService.pullAll).
+  Future<Database>? _opening;
+  String? _openingUid;
+
+  static String _dbNameFor(String uid) => 'nornapp_$uid.db';
 
   Future<Database> get database async {
-    if (_database != null) return _database!;
-    _database = await _initDB();
-    return _database!;
+    final uid = FirebaseAuth.instance.currentUser?.uid ?? 'anon';
+    // Si cambió el usuario (logout + login de otro), se abre SU base de datos.
+    if (_database != null && _openedForUid == uid) return _database!;
+    if (_opening != null && _openingUid == uid) return _opening!;
+
+    _openingUid = uid;
+    _opening = () async {
+      await reset();
+      final db = await _initDB(uid);
+      _database = db;
+      _openedForUid = uid;
+      return db;
+    }();
+    try {
+      return await _opening!;
+    } finally {
+      _opening = null;
+      _openingUid = null;
+    }
   }
 
-  Future<Database> _initDB() async {
+  Future<String> _pathFor(String uid) async {
     final dir = await getApplicationDocumentsDirectory();
-    final path = join(dir.path, _dbName);
-    debugPrint('SQLite path: $path');
+    return join(dir.path, _dbNameFor(uid));
+  }
+
+  /// Renombra la BD antigua (sin uid) al primer usuario real que entra.
+  Future<void> _migrateLegacyIfNeeded(String uid, String newPath) async {
+    if (uid == 'anon') return;
+    final dir = await getApplicationDocumentsDirectory();
+    final legacy = File(join(dir.path, _legacyDbName));
+    if (await legacy.exists() && !await File(newPath).exists()) {
+      await legacy.rename(newPath);
+      for (final suffix in ['-wal', '-shm', '-journal']) {
+        final f = File('${legacy.path}$suffix');
+        if (await f.exists()) await f.rename('$newPath$suffix');
+      }
+      debugPrint('🛠️ BD local antigua migrada al usuario actual');
+    }
+  }
+
+  Future<Database> _initDB(String uid) async {
+    final path = await _pathFor(uid);
+    await _migrateLegacyIfNeeded(uid, path);
     final db = await openDatabase(
       path,
       version: _dbVersion,
@@ -378,8 +431,16 @@ class DBProvider {
     return Sqflite.firstIntValue(res) ?? 0;
   }
 
+  /// Cierra la BD abierta (se llama en logout y al cambiar de usuario).
   Future<void> reset() async {
     await _database?.close();
     _database = null;
+    _openedForUid = null;
+  }
+
+  /// Borra por completo la BD local de un usuario (eliminación de cuenta).
+  Future<void> deleteDatabaseForUid(String uid) async {
+    await reset();
+    await deleteDatabase(await _pathFor(uid));
   }
 }

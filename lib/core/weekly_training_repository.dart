@@ -12,6 +12,7 @@ import 'dismissed_shared_service.dart';
 import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
 import 'week_dates.dart';
+import 'recurrence_rule.dart';
 
 class WeeklyTrainingRepository {
   WeeklyTrainingRepository._();
@@ -217,6 +218,41 @@ class WeeklyTrainingRepository {
     await save(entry.copyWith(isDone: !entry.isDone));
   }
 
+  /// Guarda el entrenamiento y, si [rule] se repite, crea una copia por cada
+  /// fecha de la regla (desde la fecha del entry hasta rule.until).
+  /// Devuelve cuántos se han creado en total.
+  Future<int> saveWithRecurrence(
+    WeeklyTrainingEntry entry,
+    RecurrenceRule rule,
+  ) async {
+    await save(entry);
+    if (rule.isNone) return 1;
+
+    final dates = rule
+        .occurrences(DateTime.fromMillisecondsSinceEpoch(entry.date))
+        .skip(1) // la primera es el propio entry
+        .toList();
+
+    // En tandas pequeñas: más rápido que de uno en uno sin saturar Firestore.
+    const chunk = 8;
+    for (var i = 0; i < dates.length; i += chunk) {
+      final slice = dates.skip(i).take(chunk);
+      await Future.wait(
+        slice.map(
+          (d) => save(
+            entry.copyWith(
+              id: generateId(),
+              date: d.millisecondsSinceEpoch,
+              isDone: false,
+              synced: 0,
+            ),
+          ),
+        ),
+      );
+    }
+    return dates.length + 1;
+  }
+
   Future<void> delete(String id) async {
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
@@ -331,6 +367,7 @@ class WeeklyTrainingRepository {
           'owner_name': data['owner_name'] ?? '',
           'shared_with': _listToJson(data['shared_with']),
           'synced': 1,
+          'image_data': data['image_data'] ?? '',
         };
       }).toList();
 
@@ -362,6 +399,7 @@ class WeeklyTrainingRepository {
         'owner_name': data['owner_name'] ?? '',
         'shared_with': _listToJson(data['shared_with']),
         'synced': 1,
+        'image_data': data['image_data'] ?? '',
       });
     }
 
@@ -436,6 +474,7 @@ class WeeklyTrainingRepository {
         'owner_id': _uid,
         'owner_name': _displayName,
         'shared_with': _jsonToList(entry.sharedWith),
+        'image_data': entry.imageData,
         'updated_at': FieldValue.serverTimestamp(),
       };
       await _firestore

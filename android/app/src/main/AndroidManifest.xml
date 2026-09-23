@@ -36,6 +36,9 @@
         android:label="NornApp"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+ <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-1041809144169910~6420046996"/>
 
         <activity
             android:name=".MainActivity"

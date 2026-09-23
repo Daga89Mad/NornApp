@@ -11,6 +11,8 @@ import '../core/date_change_service.dart';
 import 'date_change_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/week_dates.dart';
+import '../core/recurrence_rule.dart';
+import 'recurrence_picker.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -114,9 +116,20 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   /// Delegado en week_dates para que sea seguro frente al cambio de hora.
   DateTime _mondayOf(DateTime d) => mondayOf(d);
 
-  Future<void> _loadWeek() async {
-    setState(() => _isLoading = true);
+  // Evita que una carga antigua pise a una más reciente.
+  int _loadToken = 0;
+
+  /// Recarga la semana.
+  ///
+  /// [showSpinner] solo se usa al CAMBIAR de semana. En el resto de recargas
+  /// (marcar completada, cambios que llegan de Firebase…) NO se pone el
+  /// spinner: antes se sustituía la lista por el indicador de carga, el
+  /// ListView se volvía a crear y el scroll saltaba arriba del todo.
+  Future<void> _loadWeek({bool showSpinner = false}) async {
+    final token = ++_loadToken;
+    if (showSpinner && mounted) setState(() => _isLoading = true);
     final tasks = await _repo.getTasksForWeek(_currentWeekStart);
+    if (!mounted || token != _loadToken) return;
     setState(() {
       _tasks = tasks;
       _isLoading = false;
@@ -139,12 +152,12 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   // semana distinta de la que pintaba.
   void _prevWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, -7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   void _nextWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, 7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   String _weekLabel() => _fmtWeekRange(_currentWeekStart);
@@ -302,15 +315,16 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   // ══════════════════════════════════════════════════════════════════════════
   // DIALOGS
   // ══════════════════════════════════════════════════════════════════════════
-  String recurrence = 'none';
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
-    recurrence = 'none';
+    RecurrenceRule rule = RecurrenceRule.none;
+    bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
 
     await showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
           insetPadding: const EdgeInsets.symmetric(
@@ -361,29 +375,11 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                     textCapitalization: TextCapitalization.sentences,
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Repetir',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    children:
-                        [
-                          ('none', 'No repetir'),
-                          ('daily', 'Cada día'),
-                          ('weekly', 'Cada semana'),
-                        ].map((opt) {
-                          return ChoiceChip(
-                            label: Text(
-                              opt.$2,
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                            selected: recurrence == opt.$1,
-                            selectedColor: _accent.withOpacity(0.3),
-                            onSelected: (_) => setS(() => recurrence = opt.$1),
-                          );
-                        }).toList(),
+                  // Cada día / semana / 2 semanas / mes / X días + desde-hasta
+                  RecurrencePicker(
+                    startDate: selectedDay,
+                    accent: _accent,
+                    onChanged: (r) => rule = r,
                   ),
                 ],
               ),
@@ -391,38 +387,65 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: saving ? null : () => Navigator.pop(ctx),
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _primary),
-              onPressed: () async {
-                final title = titleCtrl.text.trim();
-                if (title.isEmpty) return;
-                final task = WeeklyTask(
-                  id: _repo.generateId(),
-                  date: DateTime(
-                    selectedDay.year,
-                    selectedDay.month,
-                    selectedDay.day,
-                  ).millisecondsSinceEpoch,
-                  title: title,
-                  description: descCtrl.text.trim(),
-                  ownerId: '',
-                  recurrence: recurrence,
-                );
-                await _repo.saveWithRecurrence(task);
-                if (ctx.mounted) Navigator.pop(ctx);
-                // Si se ha creado en otra semana, saltamos a ella para verla.
-                if (mounted) {
-                  setState(() => _currentWeekStart = _mondayOf(selectedDay));
-                }
-                _loadWeek();
-              },
-              child: const Text(
-                'Guardar',
-                style: TextStyle(color: Colors.white),
-              ),
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final title = titleCtrl.text.trim();
+                      if (title.isEmpty) return;
+                      setS(() => saving = true);
+                      final task = WeeklyTask(
+                        id: _repo.generateId(),
+                        date: DateTime(
+                          selectedDay.year,
+                          selectedDay.month,
+                          selectedDay.day,
+                        ).millisecondsSinceEpoch,
+                        title: title,
+                        description: descCtrl.text.trim(),
+                        ownerId: '',
+                        recurrence: rule.encode(),
+                      );
+                      final created = await _repo.saveWithRecurrence(
+                        task,
+                        rule,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (!mounted) return;
+                      if (created > 1) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('$created tareas creadas'),
+                            backgroundColor: Colors.green.shade600,
+                          ),
+                        );
+                      }
+                      // Si se ha creado en otra semana, saltamos a ella.
+                      final newMonday = _mondayOf(selectedDay);
+                      final changedWeek = !isSameDay(
+                        newMonday,
+                        _currentWeekStart,
+                      );
+                      setState(() => _currentWeekStart = newMonday);
+                      _loadWeek(showSpinner: changedWeek);
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Guardar',
+                      style: TextStyle(color: Colors.white),
+                    ),
             ),
           ],
         ),
@@ -1128,6 +1151,10 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     final totalAll = parents.length;
 
     return ListView.builder(
+      // La clave por semana conserva la posición del scroll al recargar.
+      key: PageStorageKey<String>(
+        'tasks_${_currentWeekStart.millisecondsSinceEpoch}',
+      ),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 100),
       itemCount: 8, // 7 días + 1 resumen al inicio
       itemBuilder: (ctx, index) {
@@ -1149,12 +1176,20 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           myUid: _myUid,
           onAddTap: () => _showCreateDialog(preselectedDay: day),
           onToggle: (t) async {
+            // Cambio optimista: se pinta al instante sin recargar la lista
+            // (así la pantalla no salta al marcar una tarea).
+            setState(() {
+              _tasks = [
+                for (final x in _tasks)
+                  x.id == t.id ? x.copyWith(isDone: !t.isDone) : x,
+              ];
+            });
             try {
               await _repo.toggleDone(t);
             } catch (e) {
               debugPrint('❌ toggleDone falló: $e');
             }
-            if (mounted) _loadWeek();
+            if (mounted) _loadWeek(); // recarga silenciosa (sin spinner)
           },
           onEditTap: _showEditDialog,
         );

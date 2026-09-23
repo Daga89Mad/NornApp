@@ -1,25 +1,21 @@
 // lib/core/firebaseCrudService.dart
+//
+// SEGURIDAD: los errores de login son genéricos a propósito. Decir "no existe
+// una cuenta con ese correo" permite averiguar qué emails están registrados.
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/foundation.dart';
 
 class FirebaseCrudService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
   /// Constructor por defecto, sin parámetros
   FirebaseCrudService();
 
-  // Helper que convierte cualquier raw a double
-  double _parseDouble(dynamic raw) {
-    if (raw == null) return 0.0;
-    if (raw is num) return raw.toDouble();
-    return double.tryParse(raw.toString()) ?? 0.0;
-  }
+  /// Longitud mínima exigida en el registro (Firebase por defecto solo pide 6).
+  static const int minPasswordLength = 8;
 
-  /// Inicia sesión con email y contraseña
-  /// Lanza Exception con mensaje legible si hay error
+  /// Inicia sesión con email y contraseña.
+  /// Lanza Exception con mensaje legible si hay error.
   Future<UserCredential> signInWithEmail({
     required String email,
     required String password,
@@ -30,58 +26,76 @@ class FirebaseCrudService {
         password: password,
       );
     } on FirebaseAuthException catch (e) {
-      // Usamos _translateErrorCode o _mapAuthError según prefieras
-      throw Exception(_translateErrorCode(e));
+      throw Exception(_signInError(e));
     }
   }
 
-  /// Registra un usuario con email y contraseña
-  /// Lanza Exception con mensaje legible si hay error
+  /// Registra un usuario con email y contraseña.
+  /// Lanza Exception con mensaje legible si hay error.
   Future<UserCredential> registerWithEmail({
     required String email,
     required String password,
   }) async {
+    final pwError = validatePassword(password);
+    if (pwError != null) throw Exception(pwError);
     try {
       return await _auth.createUserWithEmailAndPassword(
         email: email,
         password: password,
       );
     } on FirebaseAuthException catch (e) {
-      throw Exception(_mapAuthError(e));
+      throw Exception(_registerError(e));
     }
   }
 
-  /// Mapea los códigos de FirebaseAuthException a mensajes legibles
-  String _mapAuthError(FirebaseAuthException e) {
+  /// Devuelve null si la contraseña es válida, o el motivo si no lo es.
+  static String? validatePassword(String password) {
+    if (password.length < minPasswordLength) {
+      return 'La contraseña debe tener al menos $minPasswordLength caracteres.';
+    }
+    final hasLetter = RegExp(r'[A-Za-z]').hasMatch(password);
+    final hasDigit = RegExp(r'\d').hasMatch(password);
+    if (!hasLetter || !hasDigit) {
+      return 'La contraseña debe combinar letras y números.';
+    }
+    return null;
+  }
+
+  String _signInError(FirebaseAuthException e) {
     switch (e.code) {
       case 'invalid-email':
         return 'El correo electrónico no tiene un formato válido.';
       case 'user-not-found':
-        return 'No existe una cuenta con ese correo.';
       case 'wrong-password':
-        return 'La contraseña es incorrecta.';
-      case 'email-already-in-use':
-        return 'Ya existe una cuenta registrada con ese correo.';
-      case 'weak-password':
-        return 'La contraseña debe tener al menos 6 caracteres.';
+      case 'invalid-credential':
+      case 'INVALID_LOGIN_CREDENTIALS':
+        return 'Correo o contraseña incorrectos.';
+      case 'user-disabled':
+        return 'Esta cuenta está desactivada.';
+      case 'too-many-requests':
+        return 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
+      case 'network-request-failed':
+        return 'Sin conexión. Revisa tu red e inténtalo de nuevo.';
       default:
-        return e.message ?? 'Ocurrió un error de autenticación.';
+        return 'No se pudo iniciar sesión. Inténtalo de nuevo.';
     }
   }
 
-  /// Traduce códigos de FirebaseAuthException a mensajes legibles
-  String _translateErrorCode(FirebaseAuthException e) {
+  String _registerError(FirebaseAuthException e) {
     switch (e.code) {
       case 'invalid-email':
-        return 'El correo electrónico no es válido.';
+        return 'El correo electrónico no tiene un formato válido.';
       case 'email-already-in-use':
-        return 'Ya existe una cuenta con ese correo.';
+        return 'No se pudo crear la cuenta con ese correo. Si ya tienes una, inicia sesión.';
       case 'weak-password':
-        return 'La contraseña es demasiado débil.';
-      case 'operation-not-allowed':
-        return 'Operación no permitida. Contacta al soporte.';
+      case 'password-does-not-meet-requirements':
+        return 'La contraseña no cumple los requisitos de seguridad.';
+      case 'too-many-requests':
+        return 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.';
+      case 'network-request-failed':
+        return 'Sin conexión. Revisa tu red e inténtalo de nuevo.';
       default:
-        return e.message ?? 'Error desconocido de autenticación.';
+        return 'No se pudo crear la cuenta. Inténtalo de nuevo.';
     }
   }
 }

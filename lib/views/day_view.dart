@@ -15,6 +15,9 @@ import 'checklist_detail_page.dart';
 import '../core/fun_content_repository.dart';
 import '../models/calendar_category.dart';
 import '../core/category_repository.dart';
+import '../core/recurrence_rule.dart';
+import '../core/week_dates.dart';
+import 'recurrence_picker.dart';
 
 class DayView extends StatefulWidget {
   final DateTime date;
@@ -158,7 +161,7 @@ class _DayViewState extends State<DayView> {
   Future<void> _openAddEventDialog() async {
     final result = await showDialog<Map<String, dynamic>?>(
       context: context,
-      builder: (_) => const AddEventDialog(),
+      builder: (_) => AddEventDialog(date: widget.date),
     );
     if (result == null) return;
     await _saveEventFromResult(result, existingEvent: null);
@@ -247,6 +250,15 @@ class _DayViewState extends State<DayView> {
       if (existingEvent == null && mounted) {
         setState(() => _events.add(saved));
       }
+
+      // ── Repeticiones (solo al crear) ────────────────────────────────────
+      final rule = result['recurrence'] as RecurrenceRule?;
+      if (existingEvent == null && rule != null && !rule.isNone) {
+        final items = tipo == Tipo.Checklist
+            ? ((result['checklistItems'] as List<String>?) ?? const <String>[])
+            : const <String>[];
+        await _createRecurringCopies(newEvent, rule, items);
+      }
       return saved;
     } catch (e) {
       debugPrint('Error guardando evento: $e');
@@ -257,6 +269,76 @@ class _DayViewState extends State<DayView> {
       }
       return null;
     }
+  }
+
+  /// Crea una copia del evento en cada fecha de [rule] (la primera, que es
+  /// el propio día, ya está guardada). Las alarmas y notificaciones se
+  /// desplazan los mismos días que el evento.
+  Future<void> _createRecurringCopies(
+    EventItem base,
+    RecurrenceRule rule,
+    List<String> checklistItems,
+  ) async {
+    final dates = rule.occurrences(widget.date).skip(1).toList();
+    if (dates.isEmpty) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text('Creando ${dates.length} repeticiones…'),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+
+    DateTime? shift(DateTime? dt, int days) => dt == null
+        ? null
+        : DateTime(
+            dt.year,
+            dt.month,
+            dt.day + days,
+            dt.hour,
+            dt.minute,
+          ); // aritmética de calendario: no se mueve con el cambio de hora
+
+    Future<void> saveOne(DateTime d) async {
+      final offset = daysBetween(widget.date, d);
+      final copy = base.copyWith(
+        alarmAt: shift(base.alarmAt, offset),
+        notificationAt: shift(base.notificationAt, offset),
+      );
+      // base.id es null → EventRepository genera un id nuevo para cada copia.
+      final saved = await EventRepository.instance.save(copy, d);
+      if (saved.id != null && checklistItems.isNotEmpty) {
+        await ChecklistRepository.instance.saveAll(saved.id!, checklistItems);
+      }
+    }
+
+    int ok = 0;
+    const chunk = 6;
+    for (var i = 0; i < dates.length; i += chunk) {
+      final slice = dates.skip(i).take(chunk).toList();
+      final results = await Future.wait(
+        slice.map((d) async {
+          try {
+            await saveOne(d);
+            return true;
+          } catch (e) {
+            debugPrint('⚠️ Repetición del ${d.toIso8601String()} falló: $e');
+            return false;
+          }
+        }),
+      );
+      ok += results.where((r) => r).length;
+    }
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text('Evento repetido en ${ok + 1} días'),
+          backgroundColor: Colors.green.shade600,
+        ),
+      );
   }
 
   // ── Eliminar ───────────────────────────────────────────────────────────────
@@ -853,10 +935,14 @@ class AddEventDialog extends StatefulWidget {
   final EventItem? initialEvent;
   final List<String> initialChecklistItems;
 
+  /// Día del evento; se usa como "desde" de las repeticiones.
+  final DateTime? date;
+
   const AddEventDialog({
     Key? key,
     this.initialEvent,
     this.initialChecklistItems = const [],
+    this.date,
   }) : super(key: key);
 
   @override
@@ -880,6 +966,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
   bool _hasNotification = false;
   DateTime? _notifDateTime;
   bool _soloParaMi = false;
+
+  // ── Repetición (solo al crear) ────────────────────────────────────────────
+  RecurrenceRule _recurrence = RecurrenceRule.none;
 
   bool get _isEditing => widget.initialEvent != null;
 
@@ -1319,6 +1408,17 @@ class _AddEventDialogState extends State<AddEventDialog> {
                   ),
               ],
 
+              // Repetir: cada día / semana / 2 semanas / mes / X días
+              // (solo al crear; al editar se modifica solo este evento).
+              if (!_isEditing && widget.date != null) ...[
+                const Divider(height: 24),
+                RecurrencePicker(
+                  startDate: widget.date!,
+                  accent: Theme.of(context).colorScheme.primary,
+                  onChanged: (r) => setState(() => _recurrence = r),
+                ),
+              ],
+
               // Alarma / Notificación / Solo para mí
               _buildAlarmSection(),
             ],
@@ -1388,6 +1488,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
               'hasNotif': _hasNotification,
               'notifAt': _notifDateTime,
               'soloParaMi': _soloParaMi,
+              'recurrence': _isEditing ? RecurrenceRule.none : _recurrence,
             });
           },
           child: Text(_isEditing ? 'Guardar' : 'Añadir'),

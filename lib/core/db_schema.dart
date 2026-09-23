@@ -1,7 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version =
-      23; // ← v23: shared_date_overrides + pending_date_changes
+  static const int version = 24; // ← v24: image_data en weekly_trainings
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -153,7 +152,8 @@ class DBSchema {
       owner_id TEXT NOT NULL DEFAULT '',
       owner_name TEXT NOT NULL DEFAULT '',
       shared_with TEXT NOT NULL DEFAULT '',
-      synced INTEGER NOT NULL DEFAULT 0
+      synced INTEGER NOT NULL DEFAULT 0,
+      image_data TEXT NOT NULL DEFAULT ''
     )
   """;
 

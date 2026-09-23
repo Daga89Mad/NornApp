@@ -5,6 +5,52 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+// ── Claves de almacenamiento (por usuario) ───────────────────────────────────
+//
+// SEGURIDAD:
+// · El PIN se guarda en el almacenamiento seguro del sistema (Keychain en iOS,
+//   Keystore en Android), no en SharedPreferences en texto plano.
+// · Las entradas llevan el uid en la clave: si otro usuario inicia sesión en
+//   el mismo móvil, no ve ni sobrescribe el diario del anterior.
+// · El PIN ya NO se sube a Firestore con la copia de seguridad.
+
+const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+
+String _diaryUid() => FirebaseAuth.instance.currentUser?.uid ?? 'anon';
+String _diaryPrefix() => 'diary_${_diaryUid()}_';
+String _pinStorageKey() => 'diary_pin_${_diaryUid()}';
+
+// Entradas antiguas: 'diary_2026_01_31' (sin uid)
+final RegExp _legacyEntryKey = RegExp(r'^diary_\d{4}_\d{2}_\d{2}$');
+
+/// Pasa el PIN y las entradas del formato antiguo (compartido) al usuario
+/// actual. Solo tiene efecto la primera vez que se abre el diario tras
+/// actualizar la app.
+Future<void> _migrateLegacyDiary() async {
+  final prefs = await SharedPreferences.getInstance();
+
+  // PIN antiguo en texto plano → almacenamiento seguro
+  final legacyPin = prefs.getString('diary_pin');
+  if (legacyPin != null && legacyPin.isNotEmpty) {
+    final current = await _secureStorage.read(key: _pinStorageKey());
+    if (current == null || current.isEmpty) {
+      await _secureStorage.write(key: _pinStorageKey(), value: legacyPin);
+    }
+    await prefs.remove('diary_pin');
+  }
+
+  // Entradas antiguas → clave con uid
+  final prefix = _diaryPrefix();
+  for (final k in prefs.getKeys().where(_legacyEntryKey.hasMatch).toList()) {
+    final newKey = prefix + k.substring('diary_'.length);
+    if (!prefs.containsKey(newKey)) {
+      await prefs.setString(newKey, prefs.getString(k) ?? '');
+    }
+    await prefs.remove(k);
+  }
+}
 
 // ── Punto de entrada: comprueba PIN antes de mostrar el diario ───────────────
 
@@ -26,7 +72,11 @@ class _PinGate extends StatefulWidget {
 }
 
 class _PinGateState extends State<_PinGate> {
-  static const _pinKey = 'diary_pin';
+  // Bloqueo tras varios fallos (un PIN de 4 cifras solo tiene 10.000 combinaciones)
+  static const int _maxAttempts = 5;
+  static const Duration _lockDuration = Duration(seconds: 30);
+  int _failedAttempts = 0;
+  DateTime? _lockedUntil;
 
   bool _unlocked = false;
   bool _loading = true;
@@ -44,8 +94,8 @@ class _PinGateState extends State<_PinGate> {
   }
 
   Future<void> _checkPin() async {
-    final prefs = await SharedPreferences.getInstance();
-    final pin = prefs.getString(_pinKey) ?? '';
+    await _migrateLegacyDiary();
+    final pin = await _secureStorage.read(key: _pinStorageKey()) ?? '';
     if (mounted)
       setState(() {
         _storedPin = pin;
@@ -55,6 +105,12 @@ class _PinGateState extends State<_PinGate> {
   }
 
   void _onDigit(String d) {
+    final lockedUntil = _lockedUntil;
+    if (lockedUntil != null && DateTime.now().isBefore(lockedUntil)) {
+      final secs = lockedUntil.difference(DateTime.now()).inSeconds + 1;
+      setState(() => _error = 'Demasiados intentos. Espera $secs s.');
+      return;
+    }
     if (_entered.length >= 4) return;
     setState(() {
       _entered += d;
@@ -79,8 +135,7 @@ class _PinGateState extends State<_PinGate> {
         });
       } else {
         if (_entered == _firstEntry) {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString(_pinKey, _entered);
+          await _secureStorage.write(key: _pinStorageKey(), value: _entered);
           if (mounted) setState(() => _unlocked = true);
         } else {
           setState(() {
@@ -94,10 +149,20 @@ class _PinGateState extends State<_PinGate> {
     } else {
       // ── Verificar PIN ──────────────────────────────────────────────────────
       if (_entered == _storedPin) {
+        _failedAttempts = 0;
+        _lockedUntil = null;
         setState(() => _unlocked = true);
       } else {
+        _failedAttempts++;
+        final locked = _failedAttempts >= _maxAttempts;
+        if (locked) {
+          _failedAttempts = 0;
+          _lockedUntil = DateTime.now().add(_lockDuration);
+        }
         setState(() {
-          _error = 'PIN incorrecto';
+          _error = locked
+              ? 'Demasiados intentos. Espera ${_lockDuration.inSeconds} s.'
+              : 'PIN incorrecto';
           _entered = '';
         });
       }
@@ -341,7 +406,7 @@ class _DiaryContentState extends State<_DiaryContent>
 
   // Clave única por día en SharedPreferences
   String _key(DateTime d) =>
-      'diary_${d.year}_${d.month.toString().padLeft(2, '0')}_${d.day.toString().padLeft(2, '0')}';
+      '${_diaryPrefix()}${d.year}_${d.month.toString().padLeft(2, '0')}_${d.day.toString().padLeft(2, '0')}';
 
   @override
   void initState() {
@@ -476,9 +541,11 @@ class _DiaryContentState extends State<_DiaryContent>
     setState(() => _saving = true);
     try {
       final prefs = await SharedPreferences.getInstance();
+      // Solo las entradas de ESTE usuario (el PIN ya no está en prefs)
+      final prefix = _diaryPrefix();
       final keys = prefs
           .getKeys()
-          .where((k) => k.startsWith('diary_'))
+          .where((k) => k.startsWith(prefix))
           .toList();
       if (keys.isEmpty) {
         _showSnack('No hay entradas para subir', error: false);
@@ -490,13 +557,13 @@ class _DiaryContentState extends State<_DiaryContent>
           .collection('diary');
       final batch = FirebaseFirestore.instance.batch();
       for (final k in keys) {
-        final dayKey = k.replaceFirst('diary_', '');
+        final dayKey = k.substring(prefix.length); // YYYY_MM_DD
         batch.set(col.doc(dayKey), {'text': prefs.getString(k) ?? ''});
       }
       await batch.commit();
       _showSnack('✅ ${keys.length} entradas subidas correctamente');
     } catch (e) {
-      _showSnack('Error al subir: \$e', error: true);
+      _showSnack('Error al subir: $e', error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -520,14 +587,17 @@ class _DiaryContentState extends State<_DiaryContent>
       final prefs = await SharedPreferences.getInstance();
       for (final doc in snap.docs) {
         final text = doc.data()['text'] as String? ?? '';
-        await prefs.setString('diary_\${doc.id}', text);
+        // Antes, el '$' escapado guardaba siempre la MISMA clave literal
+        // y todas las entradas descargadas se sobrescribían entre sí.
+        if (doc.id.startsWith('pin')) continue; // restos de copias antiguas
+        await prefs.setString('${_diaryPrefix()}${doc.id}', text);
       }
       // Recargar la entrada del día actual
       await _loadEntry(_currentDay);
       if (mounted) setState(() {});
-      _showSnack('✅ \${snap.docs.length} entradas descargadas');
+      _showSnack('✅ ${snap.docs.length} entradas descargadas');
     } catch (e) {
-      _showSnack('Error al descargar: \$e', error: true);
+      _showSnack('Error al descargar: $e', error: true);
     } finally {
       if (mounted) setState(() => _saving = false);
     }

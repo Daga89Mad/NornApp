@@ -12,6 +12,8 @@ import 'shopping_list_screen.dart';
 import 'share_weekly_dialog.dart';
 import 'date_change_prompt.dart';
 import 'week_day_picker.dart';
+import '../core/recurrence_rule.dart';
+import 'recurrence_picker.dart';
 import '../core/week_dates.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -115,9 +117,16 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   /// Delegado en week_dates para que sea seguro frente al cambio de hora.
   DateTime _mondayOf(DateTime d) => mondayOf(d);
 
-  Future<void> _loadWeek() async {
-    setState(() => _isLoading = true);
+  // Evita que una carga antigua pise a una más reciente.
+  int _loadToken = 0;
+
+  /// Recarga la semana. El spinner solo al cambiar de semana, para que la
+  /// lista no se reconstruya (y el scroll no salte) en cada cambio.
+  Future<void> _loadWeek({bool showSpinner = false}) async {
+    final token = ++_loadToken;
+    if (showSpinner && mounted) setState(() => _isLoading = true);
     final entries = await _repo.getEntriesForWeek(_currentWeekStart);
+    if (!mounted || token != _loadToken) return;
     setState(() {
       _entries = entries;
       _isLoading = false;
@@ -150,12 +159,12 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   // semana distinta de la que pintaba.
   void _prevWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, -7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   void _nextWeek() {
     setState(() => _currentWeekStart = addDays(_currentWeekStart, 7));
-    _loadWeek();
+    _loadWeek(showSpinner: true);
   }
 
   String _weekLabel() => _fmtWeekRange(_currentWeekStart);
@@ -298,11 +307,14 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     String mealType = WeeklyMenuEntry.mealTypes.first;
+    RecurrenceRule rule = RecurrenceRule.none;
+    bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
 
     await showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
           insetPadding: const EdgeInsets.symmetric(
@@ -369,44 +381,77 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                     maxLines: 6,
                     textCapitalization: TextCapitalization.sentences,
                   ),
+                  const SizedBox(height: 12),
+                  RecurrencePicker(
+                    startDate: selectedDay,
+                    accent: _accent,
+                    onChanged: (r) => rule = r,
+                  ),
                 ],
               ),
             ),
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.pop(ctx),
+              onPressed: saving ? null : () => Navigator.pop(ctx),
               child: const Text('Cancelar'),
             ),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: _primary),
-              onPressed: () async {
-                final title = titleCtrl.text.trim();
-                if (title.isEmpty) return;
-                final entry = WeeklyMenuEntry(
-                  id: _repo.generateId(),
-                  date: DateTime(
-                    selectedDay.year,
-                    selectedDay.month,
-                    selectedDay.day,
-                  ).millisecondsSinceEpoch,
-                  mealType: mealType,
-                  title: title,
-                  description: descCtrl.text.trim(),
-                  ownerId: '',
-                );
-                await _repo.save(entry);
-                if (ctx.mounted) Navigator.pop(ctx);
-                // Si se ha creado en otra semana, saltamos a ella para verla.
-                if (mounted) {
-                  setState(() => _currentWeekStart = _mondayOf(selectedDay));
-                }
-                _loadWeek();
-              },
-              child: const Text(
-                'Guardar',
-                style: TextStyle(color: Colors.white),
-              ),
+              onPressed: saving
+                  ? null
+                  : () async {
+                      final title = titleCtrl.text.trim();
+                      if (title.isEmpty) return;
+                      setS(() => saving = true);
+                      final entry = WeeklyMenuEntry(
+                        id: _repo.generateId(),
+                        date: DateTime(
+                          selectedDay.year,
+                          selectedDay.month,
+                          selectedDay.day,
+                        ).millisecondsSinceEpoch,
+                        mealType: mealType,
+                        title: title,
+                        description: descCtrl.text.trim(),
+                        ownerId: '',
+                      );
+                      final created = await _repo.saveWithRecurrence(
+                        entry,
+                        rule,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      if (!mounted) return;
+                      if (created > 1) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('$created menús creados'),
+                            backgroundColor: Colors.green.shade600,
+                          ),
+                        );
+                      }
+                      // Si se ha creado en otra semana, saltamos a ella.
+                      final newMonday = _mondayOf(selectedDay);
+                      final changedWeek = !isSameDay(
+                        newMonday,
+                        _currentWeekStart,
+                      );
+                      setState(() => _currentWeekStart = newMonday);
+                      _loadWeek(showSpinner: changedWeek);
+                    },
+              child: saving
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Guardar',
+                      style: TextStyle(color: Colors.white),
+                    ),
             ),
           ],
         ),

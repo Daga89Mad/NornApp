@@ -240,16 +240,32 @@ class FirebaseSyncService {
 
   // ── Push: Evento ──────────────────────────────────────────────────────────
 
+  // ── Push: Evento ──────────────────────────────────────────────────────────
+
   Future<void> pushEvent(EventItem event, DateTime date) async {
     if (event.id == null || event.soloParaMi) return;
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
 
     try {
+      final ref = _db.collection('events').doc(event.id);
+
+      // Si el evento ya existe y es de OTRA persona, no se sube: un receptor
+      // no puede editar eventos ajenos (lo impiden también las reglas).
+      // Sin esta comprobación, pushEvent reescribiría owner_id y shared_with.
+      final existing = await ref.get();
+      if (existing.exists) {
+        final ownerId = existing.data()?['owner_id'] as String?;
+        if (ownerId != null && ownerId.isNotEmpty && ownerId != uid) {
+          debugPrint('⛔ Evento ${event.id} es de otro usuario: no se sube');
+          return;
+        }
+      }
+
       final sharedWithUids = await _getSharedWithUids(uid, event.category.name);
       final dayUtc = DateTime.utc(date.year, date.month, date.day);
 
-      await _db.collection('events').doc(event.id).set({
+      await ref.set({
         'title': event.title,
         'description': event.description,
         'date': Timestamp.fromDate(dayUtc),

@@ -1,0 +1,15 @@
+<!--
+  NO es un manifiesto completo: pega este bloque DENTRO de <application ...>
+  en android/app/src/main/AndroidManifest.xml (por ejemplo, justo antes de
+  </application>).
+
+  ⚠️ Sustituye el valor por tu App ID de Android (con '~'):
+     AdMob → Apps → NornApp (Android) → Configuración de la app.
+  Si falta, la app se cierra al arrancar. Este es el ID de PRUEBA de Google.
+
+  El permiso com.google.android.gms.permission.AD_ID lo añade el SDK solo;
+  NO lo quites (sin él no hay anuncios personalizados en Android 13+).
+-->
+<meta-data
+    android:name="com.google.android.gms.ads.APPLICATION_ID"
+    android:value="ca-app-pub-3940256099942544~3347511713"/>

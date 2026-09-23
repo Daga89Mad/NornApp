@@ -50,8 +50,11 @@ class _QrShareScreenState extends State<QrShareScreen>
           ],
         ),
       ),
+      // physics: sin deslizar lateralmente, para que el gesto no se confunda
+      // con mover la cámara al apuntar al QR.
       body: TabBarView(
         controller: _tabs,
+        physics: const NeverScrollableScrollPhysics(),
         children: const [_MyQrTab(), _ScanQrTab()],
       ),
     );
@@ -164,7 +167,16 @@ class _ScanQrTab extends StatefulWidget {
 class _ScanQrTabState extends State<_ScanQrTab> {
   bool _processing = false;
   bool _done = false;
-  final MobileScannerController _cam = MobileScannerController();
+
+  // Tras un QR no válido se ignoran lecturas durante un momento; si no, la
+  // cámara lo vuelve a leer 4 veces por segundo y se llenaba de avisos.
+  String? _lastRaw;
+  DateTime _ignoreUntil = DateTime.fromMillisecondsSinceEpoch(0);
+
+  final MobileScannerController _cam = MobileScannerController(
+    formats: const [BarcodeFormat.qrCode],
+    detectionSpeed: DetectionSpeed.normal,
+  );
 
   @override
   void dispose() {
@@ -172,25 +184,58 @@ class _ScanQrTabState extends State<_ScanQrTab> {
     super.dispose();
   }
 
+  /// Interpreta el contenido del QR (JSON generado en "Mi QR").
+  Map<String, dynamic>? _parsePayload(String raw) {
+    final text = raw.trim();
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        final data = Map<String, dynamic>.from(decoded);
+        // ⚠️ ANTES: se comparaba con 'nornapp' pero el QR se genera con
+        // 'NornApp' → NUNCA coincidía y todos los QR daban error.
+        final app = (data['app'] ?? '').toString().toLowerCase();
+        if (app != 'nornapp') return null;
+        return data;
+      }
+    } catch (_) {
+      // No es JSON → no es un QR de NornApp.
+    }
+    return null;
+  }
+
   Future<void> _onDetect(BarcodeCapture capture) async {
     if (_processing || _done) return;
-    final raw = capture.barcodes.first.rawValue;
+    if (capture.barcodes.isEmpty) return;
+
+    String? raw;
+    for (final b in capture.barcodes) {
+      final v = b.rawValue;
+      if (v != null && v.trim().isNotEmpty) {
+        raw = v;
+        break;
+      }
+    }
     if (raw == null) return;
+
+    // Mismo QR leído justo después de un error → se ignora un rato.
+    if (raw == _lastRaw && DateTime.now().isBefore(_ignoreUntil)) return;
+    _lastRaw = raw;
 
     setState(() => _processing = true);
 
     try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-
-      // Verificar que es un QR de nuestra app
-      if (data['app'] != 'nornapp') {
+      final data = _parsePayload(raw);
+      if (data == null) {
         _showError('Este QR no pertenece a NornApp');
         return;
       }
 
-      final toUid = data['uid'] as String? ?? '';
-      final toEmail = data['email'] as String? ?? '';
-      final toName = data['name'] as String? ?? toEmail;
+      final toUid = (data['uid'] ?? '').toString();
+      final toEmail = (data['email'] ?? '').toString();
+      final rawName = (data['name'] ?? '').toString();
+      final toName = rawName.isNotEmpty
+          ? rawName
+          : (toEmail.isNotEmpty ? toEmail : 'tu amigo');
 
       if (toUid.isEmpty) {
         _showError('QR inválido — falta el identificador');
@@ -221,6 +266,9 @@ class _ScanQrTabState extends State<_ScanQrTab> {
       if (!mounted) return;
 
       switch (result) {
+        case null:
+          _showError('No hay sesión activa');
+          break;
         case 'already_sent':
           _showInfo('Ya le enviaste una solicitud a $toName');
           break;
@@ -233,39 +281,44 @@ class _ScanQrTabState extends State<_ScanQrTab> {
         default:
           // Éxito
           setState(() => _done = true);
-          _cam.stop();
+          await _cam.stop();
           _showSuccess(toName);
       }
     } catch (e) {
-      _showError('QR no reconocido');
+      debugPrint('❌ Error procesando QR: $e');
+      _showError('No se pudo enviar la solicitud. Revisa tu conexión.');
     } finally {
       if (mounted) setState(() => _processing = false);
     }
   }
 
+  void _pauseRepeats() {
+    _ignoreUntil = DateTime.now().add(const Duration(seconds: 3));
+  }
+
   void _showError(String msg) {
+    _pauseRepeats();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg), backgroundColor: Colors.red.shade600),
-    );
-    setState(() {
-      _processing = false;
-    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Colors.red.shade600),
+      );
   }
 
   void _showInfo(String msg) {
+    _pauseRepeats();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-    setState(() {
-      _processing = false;
-    });
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
   }
 
   void _showSuccess(String name) {
     if (!mounted) return;
     showDialog(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (dialogCtx) => AlertDialog(
         title: const Text('✅ Solicitud enviada'),
         content: Text(
           'Se envió una solicitud de amistad a $name.\n'
@@ -274,10 +327,48 @@ class _ScanQrTabState extends State<_ScanQrTab> {
         actions: [
           ElevatedButton(
             onPressed: () {
-              Navigator.of(context).pop();
-              Navigator.of(context).pop(); // volver al menú
+              Navigator.of(dialogCtx).pop(); // cierra el diálogo
+              Navigator.of(context).maybePop(); // vuelve al menú
             },
             child: const Text('Genial'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCameraError(MobileScannerException error) {
+    final denied = error.errorCode == MobileScannerErrorCode.permissionDenied;
+    return Container(
+      color: Colors.black,
+      padding: const EdgeInsets.all(24),
+      alignment: Alignment.center,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            denied ? Icons.no_photography_outlined : Icons.error_outline,
+            color: Colors.white,
+            size: 56,
+          ),
+          const SizedBox(height: 16),
+          Text(
+            denied
+                ? 'NornApp no tiene permiso para usar la cámara.\n'
+                      'Actívalo en Ajustes del teléfono → NornApp → Cámara.'
+                : 'No se pudo iniciar la cámara (${error.errorCode.name}).',
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 16),
+          OutlinedButton(
+            style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+            onPressed: () async {
+              try {
+                await _cam.start();
+              } catch (_) {}
+            },
+            child: const Text('Reintentar'),
           ),
         ],
       ),
@@ -287,13 +378,13 @@ class _ScanQrTabState extends State<_ScanQrTab> {
   @override
   Widget build(BuildContext context) {
     if (_done) {
-      return Center(
+      return const Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.check_circle, color: Colors.green, size: 80),
-            const SizedBox(height: 16),
-            const Text(
+            Icon(Icons.check_circle, color: Colors.green, size: 80),
+            SizedBox(height: 16),
+            Text(
               '¡Solicitud enviada!',
               style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
             ),
@@ -305,16 +396,38 @@ class _ScanQrTabState extends State<_ScanQrTab> {
     return Stack(
       children: [
         // Cámara
-        MobileScanner(controller: _cam, onDetect: _onDetect),
+        Positioned.fill(
+          child: MobileScanner(
+            controller: _cam,
+            onDetect: _onDetect,
+            errorBuilder: (context, error, child) => _buildCameraError(error),
+          ),
+        ),
 
         // Marco de escaneo
         Center(
-          child: Container(
-            width: 240,
-            height: 240,
-            decoration: BoxDecoration(
-              border: Border.all(color: Colors.white, width: 3),
-              borderRadius: BorderRadius.circular(16),
+          child: IgnorePointer(
+            child: Container(
+              width: 240,
+              height: 240,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white, width: 3),
+                borderRadius: BorderRadius.circular(16),
+              ),
+            ),
+          ),
+        ),
+
+        // Linterna
+        Positioned(
+          top: 16,
+          right: 16,
+          child: CircleAvatar(
+            backgroundColor: Colors.black54,
+            child: IconButton(
+              tooltip: 'Linterna',
+              icon: const Icon(Icons.flash_on, color: Colors.white),
+              onPressed: () => _cam.toggleTorch(),
             ),
           ),
         ),
@@ -341,10 +454,12 @@ class _ScanQrTabState extends State<_ScanQrTab> {
 
         // Indicador de procesando
         if (_processing)
-          Container(
-            color: Colors.black.withOpacity(0.5),
-            child: const Center(
-              child: CircularProgressIndicator(color: Colors.white),
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withOpacity(0.5),
+              child: const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
             ),
           ),
       ],
