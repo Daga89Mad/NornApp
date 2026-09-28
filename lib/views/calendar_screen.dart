@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/event_item.dart';
 import '../models/shift_model.dart';
 import '../core/event_repository.dart';
@@ -71,6 +72,35 @@ class _CalendarScreenState extends State<CalendarScreen> {
     'Oscuro (modo noche)': const Color(0xFF121212),
   };
   Color get _backgroundColor => _bgOptions[_selectedBgName] ?? Colors.white;
+
+  // ── Colores según el fondo (modo noche) ───────────────────────────────────
+  //
+  // BUG CORREGIDO: con "Oscuro (modo noche)" solo cambiaba el fondo; los
+  // textos seguían en negro (cabecera Lun–Dom, números, eventos, iconos) y
+  // no se veía nada del mes. Ahora todos los colores dependen del fondo.
+
+  /// true si el fondo elegido es oscuro.
+  bool get _isDark => _backgroundColor.computeLuminance() < 0.25;
+
+  /// Texto principal (números del día, cabecera, eventos).
+  Color get _fg => _isDark ? const Color(0xFFECECEC) : Colors.black87;
+
+  /// Iconos de los controles.
+  Color get _fgMuted => _isDark ? Colors.white70 : Colors.black54;
+
+  /// Días que no pertenecen al mes visible.
+  Color get _fgOutside => _isDark ? Colors.white30 : Colors.grey.shade400;
+
+  /// Resalte de hoy / día seleccionado.
+  Color get _accent =>
+      _isDark ? const Color(0xFF90CAF9) : Theme.of(context).colorScheme.primary;
+
+  /// Superficie de las celdas del mes en modo noche (algo más clara que el
+  /// fondo para que se distinga la cuadrícula).
+  static const Color _darkCellSurface = Color(0xFF1E1E1E);
+
+  /// Barra superior.
+  Color get _barFg => _isDark ? Colors.white : Colors.black87;
 
   final List<String> _designOptions = ['Predeterminado', 'Líneas', '3D suave'];
 
@@ -156,9 +186,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: _openCategoryManager,
-        child: const Padding(
-          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          child: Icon(Icons.tune, size: 20, color: Colors.black54),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          child: Icon(Icons.tune, size: 20, color: _fgMuted),
         ),
       ),
     );
@@ -342,10 +372,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
               if (hidden > 0)
                 Text(
                   '+$hidden',
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 8,
                     fontWeight: FontWeight.w700,
                     height: 1.0,
+                    color: _fg,
                   ),
                 ),
             ],
@@ -380,7 +411,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             spreadRadius: 0,
           ),
           BoxShadow(
-            color: Colors.white.withOpacity(0.35),
+            color: Colors.white.withOpacity(_isDark ? 0.08 : 0.35),
             offset: const Offset(0, -1),
             blurRadius: 1,
           ),
@@ -441,7 +472,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
             spreadRadius: 0,
           ),
           BoxShadow(
-            color: Colors.white.withOpacity(0.3),
+            color: Colors.white.withOpacity(_isDark ? 0.08 : 0.3),
             offset: const Offset(0, -1),
             blurRadius: 1,
           ),
@@ -492,59 +523,58 @@ class _CalendarScreenState extends State<CalendarScreen> {
   BoxDecoration _cellDecoration({
     required bool isSelected,
     required bool isToday,
+    bool isInMonth = true,
   }) {
+    final accent = _accent;
+    // En modo noche las celdas del mes llevan una superficie algo más clara
+    // que el fondo para que se vea la cuadrícula.
+    final Color? darkSurface = _isDark && isInMonth ? _darkCellSurface : null;
+
     if (_selectedDesign == 'Líneas') {
       return BoxDecoration(
         color: isSelected
-            ? Theme.of(context).colorScheme.primary.withOpacity(0.08)
-            : null,
+            ? accent.withOpacity(_isDark ? 0.18 : 0.08)
+            : darkSurface,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: Colors.grey.shade300, width: 1),
+        border: Border.all(
+          color: _isDark ? Colors.white12 : Colors.grey.shade300,
+          width: 1,
+        ),
       );
     } else if (_selectedDesign == '3D suave') {
+      final Color base = darkSurface ?? _backgroundColor;
       return BoxDecoration(
         gradient: isSelected
             ? LinearGradient(
                 colors: [
-                  Colors.white,
-                  Theme.of(context).colorScheme.primary.withOpacity(0.06),
+                  _isDark ? const Color(0xFF2A2A2A) : Colors.white,
+                  accent.withOpacity(_isDark ? 0.18 : 0.06),
                 ],
               )
-            : LinearGradient(
-                colors: [_backgroundColor.withOpacity(0.98), _backgroundColor],
-              ),
+            : LinearGradient(colors: [base.withOpacity(0.98), base]),
         borderRadius: BorderRadius.circular(10),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.06),
+            color: Colors.black.withOpacity(_isDark ? 0.45 : 0.06),
             offset: const Offset(0, 4),
             blurRadius: 8,
           ),
           BoxShadow(
-            color: Colors.white.withOpacity(0.6),
+            // El brillo blanco solo tiene sentido sobre fondo claro.
+            color: Colors.white.withOpacity(_isDark ? 0.04 : 0.6),
             offset: const Offset(-2, -2),
             blurRadius: 4,
           ),
         ],
-        border: isToday
-            ? Border.all(
-                color: Theme.of(context).colorScheme.primary,
-                width: 1.2,
-              )
-            : null,
+        border: isToday ? Border.all(color: accent, width: 1.2) : null,
       );
     } else {
       return BoxDecoration(
         color: isSelected
-            ? Theme.of(context).colorScheme.primary.withOpacity(0.12)
-            : null,
+            ? accent.withOpacity(_isDark ? 0.22 : 0.12)
+            : darkSurface,
         borderRadius: BorderRadius.circular(8),
-        border: isToday
-            ? Border.all(
-                color: Theme.of(context).colorScheme.primary,
-                width: 1.2,
-              )
-            : null,
+        border: isToday ? Border.all(color: accent, width: 1.2) : null,
       );
     }
   }
@@ -554,6 +584,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget _buildFriendFilterButton() {
     if (_friendsWithSharedEvents.isEmpty) return const SizedBox.shrink();
     final anyHidden = _hiddenFriendUids.isNotEmpty;
+    final activeColor = _isDark ? Colors.blue.shade200 : Colors.blue.shade600;
     return Tooltip(
       message: 'Filtrar por amigo',
       child: InkWell(
@@ -567,7 +598,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               Icon(
                 Icons.people_outlined,
                 size: 20,
-                color: anyHidden ? Colors.blue.shade600 : Colors.black54,
+                color: anyHidden ? activeColor : _fgMuted,
               ),
               if (anyHidden)
                 Positioned(
@@ -706,7 +737,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
           child: Icon(
             Icons.edit_calendar_outlined,
             size: 20,
-            color: active ? Colors.teal : Colors.black54,
+            color: active ? Colors.teal : _fgMuted,
           ),
         ),
       ),
@@ -755,7 +786,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            const Icon(Icons.more_vert, color: Colors.black54),
+            Icon(Icons.more_vert, color: _fgMuted),
             if (hiddenCount > 0)
               Positioned(
                 top: -4,
@@ -842,7 +873,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget _buildBgPopup() {
     return PopupMenuButton<String>(
       tooltip: 'Fondo',
-      icon: const Icon(Icons.format_color_fill, color: Colors.black87),
+      icon: Icon(Icons.format_color_fill, color: _barFg),
       onSelected: (v) {
         setState(() => _selectedBgName = v);
         _saveSettings();
@@ -864,6 +895,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                   ),
                   const SizedBox(width: 8),
                   Expanded(child: Text(name, overflow: TextOverflow.ellipsis)),
+                  if (name == _selectedBgName)
+                    const Icon(Icons.check, size: 16, color: Colors.green),
                 ],
               ),
             ),
@@ -875,7 +908,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget _buildDesignPopup() {
     return PopupMenuButton<String>(
       tooltip: 'Diseño',
-      icon: const Icon(Icons.view_quilt, color: Colors.black87),
+      icon: Icon(Icons.view_quilt, color: _barFg),
       onSelected: (v) {
         setState(() => _selectedDesign = v);
         _saveSettings();
@@ -891,7 +924,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
       tooltip: _compactMode ? 'Salir modo compacto' : 'Modo compacto',
       icon: Icon(
         _compactMode ? Icons.grid_view : Icons.view_week,
-        color: Colors.black87,
+        color: _barFg,
       ),
       onPressed: () {
         setState(() => _compactMode = !_compactMode);
@@ -921,6 +954,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _selectedDay!.year == date.year &&
         _selectedDay!.month == date.month &&
         _selectedDay!.day == date.day;
+
+    // Color del número del día: hoy resaltado, fuera del mes atenuado.
+    final Color dayNumberColor = !isInMonth
+        ? _fgOutside
+        : (isToday ? _accent : _fg);
 
     final utcKey = DateTime.utc(date.year, date.month, date.day);
     final bool isPending = _pendingDays.contains(utcKey);
@@ -998,6 +1036,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                 decoration: _cellDecoration(
                   isSelected: isSelected,
                   isToday: isToday,
+                  isInMonth: isInMonth,
                 ),
                 padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
                 child: Column(
@@ -1012,7 +1051,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
-                        color: isInMonth ? null : Colors.grey[400],
+                        color: dayNumberColor,
                         height: 1.0,
                       ),
                     ),
@@ -1049,9 +1088,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                         style: TextStyle(
                           fontSize: 8,
                           fontWeight: FontWeight.w700,
-                          color:
-                              Theme.of(context).textTheme.bodyMedium?.color ??
-                              Colors.black,
+                          color: _fg,
                           height: 1.0,
                         ),
                       ),
@@ -1080,6 +1117,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
               decoration: _cellDecoration(
                 isSelected: isSelected,
                 isToday: isToday,
+                isInMonth: isInMonth,
               ),
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -1098,7 +1136,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
                             '${date.day}',
                             style: TextStyle(
                               fontWeight: FontWeight.w700,
-                              color: isInMonth ? null : Colors.grey[400],
+                              color: dayNumberColor,
                             ),
                           ),
                           const SizedBox(width: 4),
@@ -1201,8 +1239,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                                                       style: TextStyle(
                                                         fontSize: 11,
                                                         color: isInMonth
-                                                            ? null
-                                                            : Colors.grey[400],
+                                                            ? _fg
+                                                            : _fgOutside,
                                                         fontStyle: isShared
                                                             ? FontStyle.italic
                                                             : FontStyle.normal,
@@ -1281,21 +1319,30 @@ class _CalendarScreenState extends State<CalendarScreen> {
     const double perEventHeight = 22.0;
     const labels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+    // Cabecera de días de la semana (mismo estilo en compacto y detallado).
+    final TextStyle weekdayStyle = TextStyle(
+      fontWeight: FontWeight.bold,
+      color: _isDark ? Colors.white70 : Colors.black87,
+    );
+
     final titleRow = Row(
       children: [
         Expanded(
           child: Text(
             _monthLabel(_focusedMonth),
-            style: const TextStyle(color: Colors.black87),
+            style: TextStyle(color: _barFg),
           ),
         ),
         if (_eventsLoading)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
             child: SizedBox(
               width: 16,
               height: 16,
-              child: CircularProgressIndicator(strokeWidth: 2),
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: _isDark ? Colors.white70 : null,
+              ),
             ),
           ),
         _buildBgPopup(),
@@ -1303,11 +1350,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
         _buildDesignPopup(),
         _buildCompactToggle(),
         IconButton(
-          icon: const Icon(Icons.chevron_left, color: Colors.black87),
+          icon: Icon(Icons.chevron_left, color: _barFg),
           onPressed: _prevMonthAction,
         ),
         IconButton(
-          icon: const Icon(Icons.chevron_right, color: Colors.black87),
+          icon: Icon(Icons.chevron_right, color: _barFg),
           onPressed: _nextMonthAction,
         ),
       ],
@@ -1349,15 +1396,23 @@ class _CalendarScreenState extends State<CalendarScreen> {
     }
 
     return Scaffold(
+      // Sin esto, en modo noche asomaba la franja clara del Scaffold.
+      backgroundColor: _backgroundColor,
       appBar: AppBar(
-        iconTheme: const IconThemeData(color: Colors.black87),
-        actionsIconTheme: const IconThemeData(color: Colors.black87),
-        titleTextStyle: const TextStyle(
-          color: Colors.black87,
+        iconTheme: IconThemeData(color: _barFg),
+        actionsIconTheme: IconThemeData(color: _barFg),
+        titleTextStyle: TextStyle(
+          color: _barFg,
           fontSize: 20,
           fontWeight: FontWeight.w600,
         ),
-        backgroundColor: Theme.of(context).appBarTheme.backgroundColor,
+        backgroundColor: _isDark
+            ? const Color(0xFF1A1A1A)
+            : Theme.of(context).appBarTheme.backgroundColor,
+        surfaceTintColor: _isDark ? Colors.transparent : null,
+        systemOverlayStyle: _isDark
+            ? SystemUiOverlayStyle.light
+            : SystemUiOverlayStyle.dark,
         elevation: 2,
         title: titleRow,
         actions: const [],
@@ -1365,286 +1420,297 @@ class _CalendarScreenState extends State<CalendarScreen> {
       body: SafeArea(
         child: Container(
           color: _backgroundColor,
-          child: Padding(
-            padding: const EdgeInsets.all(12.0),
-            child: Column(
-              children: [
-                // ── Filtros ──────────────────────────────────────────────────
-                // ── Controles (sin chips: filtros en el menú de puntitos) ────
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      _buildFilterSummaryMenu(), // los “puntitos” para filtrar
-                      _buildManageCategoriesButton(),
-                      Tooltip(
-                        message: 'Compartir',
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: _openShareDialog,
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 4,
-                            ),
-                            child: Icon(
-                              Icons.share_outlined,
-                              size: 20,
-                              color: Colors.black54,
+          child: DefaultTextStyle.merge(
+            // Cualquier texto sin color explícito hereda el adecuado al fondo.
+            style: TextStyle(color: _fg),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                children: [
+                  // ── Filtros ────────────────────────────────────────────────
+                  // ── Controles (sin chips: filtros en el menú de puntitos) ──
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildFilterSummaryMenu(), // los “puntitos” para filtrar
+                        _buildManageCategoriesButton(),
+                        Tooltip(
+                          message: 'Compartir',
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: _openShareDialog,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 4,
+                              ),
+                              child: Icon(
+                                Icons.share_outlined,
+                                size: 20,
+                                color: _fgMuted,
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                      _buildAssignShiftButton(),
-                      _buildFriendFilterButton(),
-                    ],
+                        _buildAssignShiftButton(),
+                        _buildFriendFilterButton(),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
+                  const SizedBox(height: 8),
 
-                // ── Barra de confirmación de asignación ──────────────────────
-                if (_assigningShift != null)
-                  AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: _assigningShift!.color.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color: _assigningShift!.color.withOpacity(0.5),
-                        width: 1.5,
+                  // ── Barra de confirmación de asignación ────────────────────
+                  if (_assigningShift != null)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
                       ),
-                    ),
-                    child: _loadingAssignment
-                        ? const Center(
-                            child: SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            ),
-                          )
-                        : Row(
-                            children: [
-                              Container(
-                                width: 12,
-                                height: 12,
-                                decoration: BoxDecoration(
-                                  color: _assigningShift!.color,
-                                  borderRadius: BorderRadius.circular(3),
+                      decoration: BoxDecoration(
+                        color: _assigningShift!.color.withOpacity(
+                          _isDark ? 0.22 : 0.12,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: _assigningShift!.color.withOpacity(0.5),
+                          width: 1.5,
+                        ),
+                      ),
+                      child: _loadingAssignment
+                          ? const Center(
+                              child: SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
                                 ),
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'Asignando: ${_assigningShift!.name}  •  ${_pendingDays.length} días',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600,
-                                    color: _assigningShift!.color.withOpacity(
-                                      0.9,
+                            )
+                          : Row(
+                              children: [
+                                Container(
+                                  width: 12,
+                                  height: 12,
+                                  decoration: BoxDecoration(
+                                    color: _assigningShift!.color,
+                                    borderRadius: BorderRadius.circular(3),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    'Asignando: ${_assigningShift!.name}  •  ${_pendingDays.length} días',
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: _isDark
+                                          ? Color.lerp(
+                                              _assigningShift!.color,
+                                              Colors.white,
+                                              0.45,
+                                            )
+                                          : _assigningShift!.color.withOpacity(
+                                              0.9,
+                                            ),
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: _cancelShiftAssignment,
+                                  style: TextButton.styleFrom(
+                                    foregroundColor: _isDark
+                                        ? Colors.white70
+                                        : Colors.grey.shade600,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                    ),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  child: const Text(
+                                    'Cancelar',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                ElevatedButton.icon(
+                                  onPressed: _confirmShiftAssignment,
+                                  icon: const Icon(Icons.check, size: 14),
+                                  label: const Text(
+                                    'Confirmar',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: _assigningShift!.color,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
                                   ),
-                                  overflow: TextOverflow.ellipsis,
                                 ),
-                              ),
-                              TextButton(
-                                onPressed: _cancelShiftAssignment,
-                                style: TextButton.styleFrom(
-                                  foregroundColor: Colors.grey.shade600,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 10,
-                                  ),
-                                  minimumSize: Size.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                ),
-                                child: const Text(
-                                  'Cancelar',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              ElevatedButton.icon(
-                                onPressed: _confirmShiftAssignment,
-                                icon: const Icon(Icons.check, size: 14),
-                                label: const Text(
-                                  'Confirmar',
-                                  style: TextStyle(fontSize: 12),
-                                ),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: _assigningShift!.color,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 12,
-                                    vertical: 6,
-                                  ),
-                                  minimumSize: Size.zero,
-                                  tapTargetSize:
-                                      MaterialTapTargetSize.shrinkWrap,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
+                              ],
+                            ),
+                    ),
 
-                // ── Calendario ───────────────────────────────────────────────
-                Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.translucent,
-                    onHorizontalDragEnd: (details) {
-                      final v = details.primaryVelocity ?? 0;
-                      if (v.abs() < 250) return; // ignora arrastres pequeños
-                      if (v > 0) {
-                        _prevMonthAction(); // desliza a la derecha → mes anterior
-                      } else {
-                        _nextMonthAction(); // desliza a la izquierda → mes siguiente
-                      }
-                    },
-                    child: _compactMode
-                        ? LayoutBuilder(
-                            builder: (context, constraints) {
-                              const double labelsHeight = 32.0;
-                              const double gapBetween = 6.0;
-                              const double cellMarginCompact = 4.0;
-                              final double availableHeight =
-                                  constraints.maxHeight -
-                                  labelsHeight -
-                                  gapBetween;
-                              final double totalVertMargins =
-                                  cellMarginCompact * 2 * 6;
+                  // ── Calendario ─────────────────────────────────────────────
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onHorizontalDragEnd: (details) {
+                        final v = details.primaryVelocity ?? 0;
+                        if (v.abs() < 250) return; // ignora arrastres pequeños
+                        if (v > 0) {
+                          _prevMonthAction(); // desliza a la derecha → mes anterior
+                        } else {
+                          _nextMonthAction(); // desliza a la izquierda → mes siguiente
+                        }
+                      },
+                      child: _compactMode
+                          ? LayoutBuilder(
+                              builder: (context, constraints) {
+                                const double labelsHeight = 32.0;
+                                const double gapBetween = 6.0;
+                                const double cellMarginCompact = 4.0;
+                                final double availableHeight =
+                                    constraints.maxHeight -
+                                    labelsHeight -
+                                    gapBetween;
+                                final double totalVertMargins =
+                                    cellMarginCompact * 2 * 6;
 
-                              // La celda usa el mayor entre el espacio disponible
-                              // dividido entre 6 filas y el mínimo garantizado.
-                              // Si las celdas crecen más que la pantalla, el grid
-                              // se vuelve scrollable verticalmente.
-                              final double compactCellH = math.max(
-                                ((availableHeight - totalVertMargins) / 6.0) -
-                                    1.0,
-                                _kMinCompactCellH,
-                              );
-                              final double compactCellW =
-                                  (constraints.maxWidth / 7.0).clamp(
-                                    1.0,
-                                    double.infinity,
-                                  );
-                              final double gridH =
-                                  (compactCellH * 6) + totalVertMargins;
+                                // La celda usa el mayor entre el espacio disponible
+                                // dividido entre 6 filas y el mínimo garantizado.
+                                // Si las celdas crecen más que la pantalla, el grid
+                                // se vuelve scrollable verticalmente.
+                                final double compactCellH = math.max(
+                                  ((availableHeight - totalVertMargins) / 6.0) -
+                                      1.0,
+                                  _kMinCompactCellH,
+                                );
+                                final double compactCellW =
+                                    (constraints.maxWidth / 7.0).clamp(
+                                      1.0,
+                                      double.infinity,
+                                    );
+                                final double gridH =
+                                    (compactCellH * 6) + totalVertMargins;
 
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  // Cabecera de días fija
-                                  SizedBox(
-                                    height: labelsHeight,
-                                    child: Row(
-                                      children: List.generate(
-                                        7,
-                                        (i) => SizedBox(
-                                          width: compactCellW,
-                                          child: Center(
-                                            child: Text(
-                                              labels[i],
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                color: Colors.black87,
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    // Cabecera de días fija
+                                    SizedBox(
+                                      height: labelsHeight,
+                                      child: Row(
+                                        children: List.generate(
+                                          7,
+                                          (i) => SizedBox(
+                                            width: compactCellW,
+                                            child: Center(
+                                              child: Text(
+                                                labels[i],
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: weekdayStyle,
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                  SizedBox(height: gapBetween),
-                                  // Grid scrollable si la altura supera la pantalla
-                                  Expanded(
-                                    child: SingleChildScrollView(
-                                      physics: gridH > availableHeight
-                                          ? const ClampingScrollPhysics()
-                                          : const NeverScrollableScrollPhysics(),
-                                      child: SizedBox(
-                                        height: gridH,
-                                        width: constraints.maxWidth,
-                                        child: GridView.count(
-                                          physics:
-                                              const NeverScrollableScrollPhysics(),
-                                          crossAxisCount: 7,
-                                          childAspectRatio:
-                                              compactCellW / compactCellH,
-                                          mainAxisSpacing: 0,
-                                          crossAxisSpacing: 0,
-                                          padding: EdgeInsets.zero,
-                                          shrinkWrap: true,
-                                          children: List.generate(
-                                            totalCells,
-                                            (i) => _buildCell(
-                                              cells[i],
-                                              width: compactCellW,
-                                              height: compactCellH,
-                                              compact: true,
+                                    SizedBox(height: gapBetween),
+                                    // Grid scrollable si la altura supera la pantalla
+                                    Expanded(
+                                      child: SingleChildScrollView(
+                                        physics: gridH > availableHeight
+                                            ? const ClampingScrollPhysics()
+                                            : const NeverScrollableScrollPhysics(),
+                                        child: SizedBox(
+                                          height: gridH,
+                                          width: constraints.maxWidth,
+                                          child: GridView.count(
+                                            physics:
+                                                const NeverScrollableScrollPhysics(),
+                                            crossAxisCount: 7,
+                                            childAspectRatio:
+                                                compactCellW / compactCellH,
+                                            mainAxisSpacing: 0,
+                                            crossAxisSpacing: 0,
+                                            padding: EdgeInsets.zero,
+                                            shrinkWrap: true,
+                                            children: List.generate(
+                                              totalCells,
+                                              (i) => _buildCell(
+                                                cells[i],
+                                                width: compactCellW,
+                                                height: compactCellH,
+                                                compact: true,
+                                              ),
                                             ),
                                           ),
                                         ),
                                       ),
                                     ),
+                                  ],
+                                );
+                              },
+                            )
+                          : SingleChildScrollView(
+                              child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                controller: _horizontalController,
+                                child: ConstrainedBox(
+                                  constraints: BoxConstraints(
+                                    minWidth: totalWidth,
                                   ),
-                                ],
-                              );
-                            },
-                          )
-                        : SingleChildScrollView(
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              controller: _horizontalController,
-                              child: ConstrainedBox(
-                                constraints: BoxConstraints(
-                                  minWidth: totalWidth,
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    SizedBox(
-                                      height: 32,
-                                      child: Row(
-                                        children: List.generate(
-                                          7,
-                                          (i) => SizedBox(
-                                            width: realCellWidth,
-                                            child: Center(
-                                              child: Text(
-                                                labels[i],
-                                                style: const TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.black87,
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      SizedBox(
+                                        height: 32,
+                                        child: Row(
+                                          children: List.generate(
+                                            7,
+                                            (i) => SizedBox(
+                                              width: realCellWidth,
+                                              child: Center(
+                                                child: Text(
+                                                  labels[i],
+                                                  style: weekdayStyle,
                                                 ),
                                               ),
                                             ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 8),
-                                    buildCalendarTable(
-                                      realCellWidth,
-                                      baseCellHeight,
-                                    ),
-                                  ],
+                                      const SizedBox(height: 8),
+                                      buildCalendarTable(
+                                        realCellWidth,
+                                        baseCellHeight,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),

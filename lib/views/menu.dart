@@ -6,6 +6,8 @@
 // - Added "threeD" style: cards with depth, gradient, shadow and press animation.
 // - Defensive layout to avoid unbounded constraints and small fixes for Material 3 text theme.
 // - v2: Added Menú Semanal and Tareas Semanales after Calendario.
+// - v3: Added Gastos (proyectos de gastos compartidos) after Tareas semanales.
+//       Al entrar se crean los periodos pendientes de los gastos periódicos.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -13,6 +15,7 @@ import 'package:nornapp/views/calendar_screen.dart';
 import 'package:nornapp/views/loginBody.dart';
 import 'package:nornapp/views/account_settings_screen.dart';
 import 'package:nornapp/core/account_service.dart';
+import 'package:nornapp/core/expense_repository.dart';
 import 'package:nornapp/views/premium/banner_ad_widget.dart';
 import 'package:nornapp/views/shifts_screen.dart';
 import 'package:nornapp/views/friends_screen.dart';
@@ -22,6 +25,7 @@ import 'package:nornapp/views/fun_day_sheet.dart';
 import 'package:nornapp/views/weekly_menu_screen.dart';
 import 'package:nornapp/views/weekly_training_screen.dart';
 import 'package:nornapp/views/weekly_tasks_screen.dart';
+import 'package:nornapp/views/expenses/expenses_screen.dart';
 import 'dart:math' as math;
 import '../core/settings_repository.dart';
 
@@ -94,6 +98,9 @@ class _MenuScreenState extends State<MenuScreen> {
   void initState() {
     super.initState();
     _loadSettings();
+    // Gastos periódicos: si algún periodo debería existir ya (aunque sea de
+    // hace días) y ningún miembro lo ha creado todavía, se crea ahora.
+    ExpenseRepository.instance.generateDueInstances();
   }
 
   Future<void> _loadSettings() async {
@@ -154,6 +161,12 @@ class _MenuScreenState extends State<MenuScreen> {
     ).push(MaterialPageRoute(builder: (_) => const WeeklyTasksScreen()));
   }
 
+  void _openExpenses() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const ExpensesScreen()));
+  }
+
   void _openShifts() {
     Navigator.of(
       context,
@@ -210,6 +223,11 @@ class _MenuScreenState extends State<MenuScreen> {
       onTap: _openWeeklyTasks,
     ),
     _MenuItemData(
+      icon: Icons.account_balance_wallet_outlined,
+      label: 'Gastos',
+      onTap: _openExpenses,
+    ),
+    _MenuItemData(
       icon: Icons.work_history,
       label: 'Turnos',
       onTap: _openShifts,
@@ -220,7 +238,6 @@ class _MenuScreenState extends State<MenuScreen> {
       label: 'Diario',
       onTap: _openDiary,
     ),
-    _MenuItemData(icon: Icons.group, label: 'Planilla de turnos', onTap: () {}),
     _MenuItemData(
       icon: Icons.qr_code,
       label: 'Compartir usuario (QR)',
@@ -249,14 +266,14 @@ class _MenuScreenState extends State<MenuScreen> {
         return palette.primary.withOpacity(0.88);
       case 'Tareas semanales':
         return palette.primary.withOpacity(0.85);
+      case 'Gastos':
+        return palette.primary.withOpacity(0.9);
       case 'Turnos':
         return palette.primary.withOpacity(0.95);
       case 'Amigos':
         return palette.primary.withOpacity(0.80);
       case 'Diario':
         return palette.primary.withOpacity(0.9);
-      case 'Planilla de turnos':
-        return palette.primary.withOpacity(0.75);
       case 'Compartir usuario (QR)':
         return palette.primary.withOpacity(0.88);
       case 'Ajustes':

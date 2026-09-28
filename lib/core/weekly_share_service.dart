@@ -9,6 +9,8 @@
 //   · Los nuevos docs que guarda A también incluyen shared_with gracias al repositorio
 //   · B tiene un listener en tiempo real sobre docs donde shared_with contains B
 //   · Además se puede compartir UN SOLO item con un amigo (shareSingleItem).
+//     Si el item es una tarea principal, el cambio se aplica también a sus
+//     subtareas, para que la otra persona las vea.
 
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -134,46 +136,66 @@ class WeeklyShareService {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // COMPARTIR UN SOLO ITEM (menú o tarea concreta) CON UN AMIGO
+  // COMPARTIR UN SOLO ITEM (menú, entreno o tarea concreta) CON UN AMIGO
   // ══════════════════════════════════════════════════════════════════════════
 
-  /// Añade [friendUid] al shared_with de un único documento (menú o tarea)
-  /// tanto en Firebase como en local. No toca la configuración global.
+  /// Añade [friendUid] al shared_with de un único documento (y, si es una
+  /// tarea principal, al de sus subtareas) tanto en Firebase como en local.
+  /// No toca la configuración global.
   Future<void> shareSingleItem({
-    required String type, // 'menus' | 'tasks'
+    required String type, // 'menus' | 'tasks' | 'trainings'
     required String docId,
     required String friendUid,
   }) async {
     if (_uid.isEmpty || friendUid.isEmpty || docId.isEmpty) return;
-    try {
-      await _db.collection(_colFor(type)).doc(docId).set({
-        'shared_with': FieldValue.arrayUnion([friendUid]),
-        'updated_at': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      debugPrint('❌ shareSingleItem Firebase: $e');
+    for (final id in await _withOwnChildren(type, docId)) {
+      try {
+        await _db.collection(_colFor(type)).doc(id).set({
+          'shared_with': FieldValue.arrayUnion([friendUid]),
+          'updated_at': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('❌ shareSingleItem Firebase ($id): $e');
+      }
+      await _mergeLocalSharedWith(type, id, add: [friendUid]);
     }
-    await _mergeLocalSharedWith(type, docId, add: [friendUid]);
     debugPrint('📤 Item $docId compartido con $friendUid');
   }
 
-  /// Quita [friendUid] del shared_with de un único documento.
+  /// Quita [friendUid] del shared_with de un único documento (y de sus
+  /// subtareas si es una tarea principal).
   Future<void> unshareSingleItem({
     required String type,
     required String docId,
     required String friendUid,
   }) async {
     if (_uid.isEmpty || friendUid.isEmpty || docId.isEmpty) return;
-    try {
-      await _db.collection(_colFor(type)).doc(docId).set({
-        'shared_with': FieldValue.arrayRemove([friendUid]),
-        'updated_at': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      debugPrint('❌ unshareSingleItem Firebase: $e');
+    for (final id in await _withOwnChildren(type, docId)) {
+      try {
+        await _db.collection(_colFor(type)).doc(id).set({
+          'shared_with': FieldValue.arrayRemove([friendUid]),
+          'updated_at': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      } catch (e) {
+        debugPrint('❌ unshareSingleItem Firebase ($id): $e');
+      }
+      await _mergeLocalSharedWith(type, id, remove: [friendUid]);
     }
-    await _mergeLocalSharedWith(type, docId, remove: [friendUid]);
     debugPrint('🚫 Item $docId dejado de compartir con $friendUid');
+  }
+
+  /// [docId] + sus subtareas PROPIAS (solo aplica a tareas).
+  Future<List<String>> _withOwnChildren(String type, String docId) async {
+    if (type != 'tasks') return [docId];
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'parent_id = ? AND owner_id = ?',
+      whereArgs: [docId, _uid],
+    );
+    return [
+      docId,
+      ...rows.map((r) => r['id'] as String? ?? '').where((id) => id.isNotEmpty),
+    ];
   }
 
   /// Devuelve el set de UIDs con los que está compartido un item (según local).

@@ -91,6 +91,21 @@ class WeeklyTrainingRepository {
     return sharedWith.contains('"$_uid"');
   }
 
+  /// shared_with guardado AHORA en local para [id], o null si el
+  /// entrenamiento todavía no existe (es nuevo).
+  /// Ver WeeklyTaskRepository._storedSharedWith.
+  Future<String?> _storedSharedWith(String id) async {
+    if (id.isEmpty) return null;
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTrainings,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['shared_with'] as String?) ?? '';
+  }
+
   /// Mueve un entrenamiento a otro día.
   ///
   /// · PROPIO      → cambia la fecha real y se sincroniza con todos.
@@ -133,18 +148,24 @@ class WeeklyTrainingRepository {
   }
 
   /// Guarda un nuevo entry o actualiza uno existente.
+  ///
+  /// BUG CORREGIDO (igual que en tareas): en un entrenamiento EXISTENTE se
+  /// respeta el shared_with actual de la BD local y no se vuelve a sumar el
+  /// reparto global. Solo los NUEVOS heredan el reparto global.
   Future<void> save(WeeklyTrainingEntry entry) async {
     final bool isMine = entry.ownerId.isEmpty || entry.ownerId == _uid;
+    final String? stored = await _storedSharedWith(entry.id);
 
     // ── Entrenamiento compartido POR OTRA persona ─────────────────────────────
     // Solo puedo tocar mi progreso (is_done), no el contenido.
     if (!isMine) {
+      final foreign = entry.copyWith(sharedWith: stored ?? entry.sharedWith);
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyTrainings,
-        entry.copyWith(synced: 0).toMap(),
+        foreign.copyWith(synced: 0).toMap(),
       );
       try {
-        await _pushDoneFlagOnly(entry);
+        await _pushDoneFlagOnly(foreign);
       } catch (e) {
         debugPrint('⚠️ is_done no sincronizado (entrenamiento ajeno): $e');
       }
@@ -152,9 +173,27 @@ class WeeklyTrainingRepository {
     }
 
     // ── Entrenamiento PROPIO ──────────────────────────────────────────────────
-    var toSave = entry.copyWith(
+    final Set<String> uids;
+    if (stored != null) {
+      uids = WeeklyShareService.parseUids(stored);
+    } else {
+      uids = WeeklyShareService.parseUids(entry.sharedWith);
+      try {
+        uids.addAll(
+          await WeeklyShareService.instance.getSharedUidsForType('trainings'),
+        );
+      } catch (e) {
+        debugPrint('⚠️ No se pudo leer el reparto global de entrenos: $e');
+      }
+    }
+    uids
+      ..remove(_uid)
+      ..remove('');
+
+    final toSave = entry.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
+      sharedWith: WeeklyShareService.uidsToJson(uids),
       synced: 0,
     );
     await DBProvider.db.insertOrReplace(
@@ -163,30 +202,19 @@ class WeeklyTrainingRepository {
     );
 
     try {
-      // shared_with = UNIÓN de lo ya compartido en este item + reparto global.
-      // Así los compartidos individuales NO se pierden al editar/guardar y los
-      // nuevos entrenamientos heredan el "compartir toda la semana".
-      final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
-        'trainings',
-      );
-      final merged = WeeklyShareService.parseUids(entry.sharedWith)
-        ..addAll(globalUids);
-      toSave = toSave.copyWith(
-        sharedWith: WeeklyShareService.uidsToJson(merged),
-      );
-      await DBProvider.db.insertOrReplace(
-        DBSchema.tableWeeklyTrainings,
-        toSave.toMap(),
-      );
       await _pushToFirebase(toSave);
     } catch (e) {
       debugPrint('⚠️ Cambio guardado en local; falló la sincronización: $e');
     }
   }
 
-  /// Reaplica el reparto global a TODOS mis entrenamientos, conservando además
-  /// los compartidos individuales que cada uno ya tuviera. Llamar tras abrir
-  /// el diálogo de compartir.
+  /// Reintenta subir los entrenamientos propios que no llegaron a Firebase
+  /// (synced = 0), añadiéndoles el reparto global.
+  ///
+  /// BUG CORREGIDO: antes recorría TODOS y les volvía a sumar el reparto
+  /// global, con lo que reaparecía quien se había quitado a mano de un
+  /// entrenamiento concreto. Los ya sincronizados los actualiza
+  /// shareWithFriends() directamente en Firebase.
   Future<void> reapplyShares() async {
     if (_uid.isEmpty) return;
     final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
@@ -194,13 +222,15 @@ class WeeklyTrainingRepository {
     );
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTrainings,
-      where: 'owner_id = ?',
+      where: 'owner_id = ? AND synced = 0',
       whereArgs: [_uid],
     );
     for (final row in rows) {
       final base = WeeklyTrainingEntry.fromMap(row);
       final merged = WeeklyShareService.parseUids(base.sharedWith)
-        ..addAll(globalUids);
+        ..addAll(globalUids)
+        ..remove(_uid)
+        ..remove('');
       final e = base.copyWith(
         sharedWith: WeeklyShareService.uidsToJson(merged),
         synced: 0,
@@ -211,7 +241,7 @@ class WeeklyTrainingRepository {
       );
       await _pushToFirebase(e);
     }
-    debugPrint('🔁 Reaplicado reparto a ${rows.length} entrenamientos');
+    debugPrint('🔁 Reintentados ${rows.length} entrenamientos pendientes');
   }
 
   Future<void> toggleDone(WeeklyTrainingEntry entry) async {

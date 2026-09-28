@@ -110,17 +110,49 @@ class WeeklyTaskRepository {
     return sharedWith.contains('"$_uid"');
   }
 
+  /// shared_with guardado AHORA en local para [id], o null si la tarea todavía
+  /// no existe (es nueva).
+  ///
+  /// Es la única fuente fiable al guardar: el objeto que llega a save() puede
+  /// venir de un diálogo abierto ANTES de compartir/descompartir desde
+  /// "Compartir solo esta tarea" y traer un shared_with viejo.
+  Future<String?> _storedSharedWith(String id) async {
+    if (id.isEmpty) return null;
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['shared_with'] as String?) ?? '';
+  }
+
+  /// Guarda una tarea.
+  ///
+  /// BUG CORREGIDO: antes se usaba el shared_with del objeto recibido (viejo si
+  /// venía del diálogo de edición) y además se le volvía a sumar el reparto
+  /// global. Resultado: al pulsar "Guardar" desaparecía la persona con la que
+  /// se acababa de compartir y volvía a aparecer la del reparto global.
+  ///
+  /// Ahora:
+  ///  · Tarea NUEVA     → hereda lo que traiga + el reparto global.
+  ///  · Tarea EXISTENTE → se respeta el shared_with actual de la BD local
+  ///    (compartidos y descompartidos individuales incluidos). El reparto
+  ///    global ya se aplicó al crearla o lo aplica shareWithFriends().
   Future<void> save(WeeklyTask task) async {
     final bool isMine = task.ownerId.isEmpty || task.ownerId == _uid;
+    final String? stored = await _storedSharedWith(task.id);
 
     // ── Tarea compartida POR OTRA persona ────────────────────────────────────
     if (!isMine) {
+      final foreign = task.copyWith(sharedWith: stored ?? task.sharedWith);
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyTasks,
-        task.copyWith(synced: 0).toMap(),
+        foreign.copyWith(synced: 0).toMap(),
       );
       try {
-        await _pushDoneFlagOnly(task);
+        await _pushDoneFlagOnly(foreign);
       } catch (e) {
         debugPrint('⚠️ is_done no sincronizado (tarea ajena): $e');
       }
@@ -128,9 +160,27 @@ class WeeklyTaskRepository {
     }
 
     // ── Tarea PROPIA ──────────────────────────────────────────────────────────
-    var toSave = task.copyWith(
+    final Set<String> uids;
+    if (stored != null) {
+      uids = WeeklyShareService.parseUids(stored);
+    } else {
+      uids = WeeklyShareService.parseUids(task.sharedWith);
+      try {
+        uids.addAll(
+          await WeeklyShareService.instance.getSharedUidsForType('tasks'),
+        );
+      } catch (e) {
+        debugPrint('⚠️ No se pudo leer el reparto global de tareas: $e');
+      }
+    }
+    uids
+      ..remove(_uid)
+      ..remove('');
+
+    final toSave = task.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
+      sharedWith: WeeklyShareService.uidsToJson(uids),
       synced: 0,
     );
     await DBProvider.db.insertOrReplace(
@@ -139,28 +189,19 @@ class WeeklyTaskRepository {
     );
 
     try {
-      // shared_with = UNIÓN de lo ya compartido en el item + reparto global.
-      final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
-        'tasks',
-      );
-      final merged = WeeklyShareService.parseUids(task.sharedWith)
-        ..addAll(globalUids);
-      final sharedJson = WeeklyShareService.uidsToJson(merged);
-      toSave = toSave.copyWith(sharedWith: sharedJson);
-      await DBProvider.db.insertOrReplace(
-        DBSchema.tableWeeklyTasks,
-        toSave.toMap(),
-      );
-      await _pushToFirebase(toSave, merged.toList());
+      await _pushToFirebase(toSave, uids.toList());
     } catch (e) {
       debugPrint('⚠️ Cambio guardado en local; falló la sincronización: $e');
     }
   }
 
   /// Crea una subtarea colgando de [parent].
+  /// La subtarea hereda con quién está compartida la tarea principal, para que
+  /// quien la tenga compartida vea también sus subtareas.
   Future<void> addSubtask(WeeklyTask parent, String title) async {
     final t = title.trim();
     if (t.isEmpty) return;
+    final parentShares = await _storedSharedWith(parent.id);
     final sub = WeeklyTask(
       id: generateId(),
       date: parent.date,
@@ -168,6 +209,7 @@ class WeeklyTaskRepository {
       description: '',
       isDone: false,
       ownerId: '', // save() lo marca como mío
+      sharedWith: parentShares ?? parent.sharedWith,
       parentId: parent.id,
     );
     await save(sub);
@@ -189,8 +231,13 @@ class WeeklyTaskRepository {
     }
   }
 
-  /// Reaplica el reparto global a TODAS mis tareas, conservando además los
-  /// compartidos individuales que cada tarea ya tuviera.
+  /// Reintenta subir las tareas propias que no llegaron a Firebase
+  /// (synced = 0), añadiéndoles el reparto global.
+  ///
+  /// BUG CORREGIDO: antes recorría TODAS las tareas y les volvía a sumar el
+  /// reparto global, así que al cerrar el diálogo de compartir reaparecía la
+  /// persona que se había quitado a mano de una tarea concreta. Las tareas ya
+  /// sincronizadas las actualiza shareWithFriends() directamente en Firebase.
   Future<void> reapplyShares() async {
     if (_uid.isEmpty) return;
     final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
@@ -199,13 +246,15 @@ class WeeklyTaskRepository {
 
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
-      where: 'owner_id = ?',
+      where: 'owner_id = ? AND synced = 0',
       whereArgs: [_uid],
     );
     for (final row in rows) {
       final base = WeeklyTask.fromMap(row);
       final merged = WeeklyShareService.parseUids(base.sharedWith)
-        ..addAll(globalUids);
+        ..addAll(globalUids)
+        ..remove(_uid)
+        ..remove('');
       final t = base.copyWith(
         sharedWith: WeeklyShareService.uidsToJson(merged),
         synced: 0,
@@ -213,7 +262,7 @@ class WeeklyTaskRepository {
       await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyTasks, t.toMap());
       await _pushToFirebase(t, merged.toList());
     }
-    debugPrint('🔁 Reaplicado reparto a ${rows.length} tareas');
+    debugPrint('🔁 Reintentadas ${rows.length} tareas pendientes de subir');
   }
 
   Future<void> toggleDone(WeeklyTask task) async {

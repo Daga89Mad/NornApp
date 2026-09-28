@@ -108,6 +108,20 @@ class WeeklyMenuRepository {
     return sharedWith.contains('"$_uid"');
   }
 
+  /// shared_with guardado AHORA en local para [id], o null si el menú todavía
+  /// no existe (es nuevo). Ver WeeklyTaskRepository._storedSharedWith.
+  Future<String?> _storedSharedWith(String id) async {
+    if (id.isEmpty) return null;
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyMenus,
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: '1',
+    );
+    if (rows.isEmpty) return null;
+    return (rows.first['shared_with'] as String?) ?? '';
+  }
+
   /// Mueve un menú a otro día.
   ///
   /// · Menú PROPIO      → cambia la fecha real y se sincroniza con todos.
@@ -150,17 +164,23 @@ class WeeklyMenuRepository {
   }
 
   /// Guarda un nuevo entry o actualiza uno existente.
+  ///
+  /// BUG CORREGIDO (igual que en tareas): en un menú EXISTENTE se respeta el
+  /// shared_with actual de la BD local y no se vuelve a sumar el reparto
+  /// global. Solo los menús NUEVOS heredan el reparto global.
   Future<void> save(WeeklyMenuEntry entry) async {
     final bool isMine = entry.ownerId.isEmpty || entry.ownerId == _uid;
+    final String? stored = await _storedSharedWith(entry.id);
 
     // ── Menú compartido POR OTRA persona ──────────────────────────────────────
     if (!isMine) {
+      final foreign = entry.copyWith(sharedWith: stored ?? entry.sharedWith);
       await DBProvider.db.insertOrReplace(
         DBSchema.tableWeeklyMenus,
-        entry.copyWith(synced: 0).toMap(),
+        foreign.copyWith(synced: 0).toMap(),
       );
       try {
-        await _pushContentOnly(entry);
+        await _pushContentOnly(foreign);
       } catch (e) {
         debugPrint('⚠️ contenido de menú no sincronizado (ajeno): $e');
       }
@@ -168,26 +188,34 @@ class WeeklyMenuRepository {
     }
 
     // ── Menú PROPIO ───────────────────────────────────────────────────────────
-    // shared_with = UNIÓN de lo ya compartido en este item + reparto global.
-    // Así los compartidos individuales NO se pierden al editar/guardar.
-    final globalUids = await WeeklyShareService.instance.getSharedUidsForType(
-      'menus',
-    );
-    final merged = WeeklyShareService.parseUids(entry.sharedWith)
-      ..addAll(globalUids);
-    final sharedJson = WeeklyShareService.uidsToJson(merged);
+    final Set<String> uids;
+    if (stored != null) {
+      uids = WeeklyShareService.parseUids(stored);
+    } else {
+      uids = WeeklyShareService.parseUids(entry.sharedWith);
+      try {
+        uids.addAll(
+          await WeeklyShareService.instance.getSharedUidsForType('menus'),
+        );
+      } catch (e) {
+        debugPrint('⚠️ No se pudo leer el reparto global de menús: $e');
+      }
+    }
+    uids
+      ..remove(_uid)
+      ..remove('');
 
     final toSave = entry.copyWith(
       ownerId: _uid,
       ownerName: _displayName,
-      sharedWith: sharedJson,
+      sharedWith: WeeklyShareService.uidsToJson(uids),
       synced: 0,
     );
     await DBProvider.db.insertOrReplace(
       DBSchema.tableWeeklyMenus,
       toSave.toMap(),
     );
-    _pushToFirebase(toSave, merged.toList());
+    _pushToFirebase(toSave, uids.toList());
   }
 
   /// Guarda el menú y, si [rule] se repite, crea una copia por cada fecha de
