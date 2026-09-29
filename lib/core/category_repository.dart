@@ -1,4 +1,10 @@
 // lib/core/category_repository.dart
+//
+// CAMBIO: delete() ahora también borra la categoría en la nube cuando es
+// propia. Antes solo se borraba del móvil y la copia de Firestore seguía
+// ahí: al reinstalar o al usar "Sincronizar datos" la categoría borrada
+// volvía a aparecer.
+import 'dart:async';
 import 'dart:math';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -85,11 +91,36 @@ class CategoryRepository {
     await _pushToFirestore(cat);
   }
 
+  /// Borra la categoría del móvil y, si es PROPIA, también de la nube.
+  /// Las importadas de un amigo solo se quitan del móvil (no son tuyas).
   Future<void> delete(String key) async {
+    final rows = await DBProvider.db.query(
+      DBSchema.tableCalendarCategories,
+      where: 'id = ?',
+      whereArgs: [key],
+      limit: '1',
+    );
+    final ownerId = rows.isEmpty ? null : rows.first['owner_id'] as String?;
+
     await DBProvider.db.delete(
       DBSchema.tableCalendarCategories,
       where: 'id = ?',
       whereArgs: [key],
+    );
+
+    final uid = _myUid;
+    if (uid == null) return;
+    final isMine = ownerId == null || ownerId.isEmpty || ownerId == uid;
+    if (!isMine) return;
+
+    // Sin await: sin conexión Firestore lo deja en cola y lo borra al
+    // recuperarla; así la pantalla no se queda esperando.
+    unawaited(
+      _fs.collection(_collection).doc('${uid}_$key').delete().catchError((
+        Object e,
+      ) {
+        debugPrint('❌ borrar categoría en la nube: $e');
+      }),
     );
   }
 

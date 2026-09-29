@@ -8,6 +8,8 @@
 // - v2: Added Menú Semanal and Tareas Semanales after Calendario.
 // - v3: Added Gastos (proyectos de gastos compartidos) after Tareas semanales.
 //       Al entrar se crean los periodos pendientes de los gastos periódicos.
+// - v4: Al pulsar una notificación de solicitud de amistad o de cambio de
+//       día se abre directamente la pantalla correspondiente.
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -16,6 +18,8 @@ import 'package:nornapp/views/loginBody.dart';
 import 'package:nornapp/views/account_settings_screen.dart';
 import 'package:nornapp/core/account_service.dart';
 import 'package:nornapp/core/expense_repository.dart';
+import 'package:nornapp/core/firebase_sync_service.dart';
+import 'package:nornapp/core/push_notification_service.dart';
 import 'package:nornapp/views/premium/banner_ad_widget.dart';
 import 'package:nornapp/views/shifts_screen.dart';
 import 'package:nornapp/views/friends_screen.dart';
@@ -98,9 +102,61 @@ class _MenuScreenState extends State<MenuScreen> {
   void initState() {
     super.initState();
     _loadSettings();
+    _syncCalendarOnStart();
     // Gastos periódicos: si algún periodo debería existir ya (aunque sea de
     // hace días) y ningún miembro lo ha creado todavía, se crea ahora.
     ExpenseRepository.instance.generateDueInstances();
+
+    // Notificaciones de amistad / cambio de día: al pulsarlas se abre su
+    // pantalla. Si la app se abrió desde una (estaba cerrada), se atiende en
+    // cuanto el menú está en pantalla.
+    PushNotificationService.instance.onOpenFromPush = _openFromPush;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final pending = PushNotificationService.instance.takePendingOpen();
+      if (pending != null) _openFromPush(pending);
+    });
+  }
+
+  /// Abre la pantalla que corresponde a una notificación pulsada.
+  /// Vuelve primero al menú para no apilar pantallas duplicadas (dos
+  /// pantallas de tareas a la vez se pisarían los listeners).
+  void _openFromPush(Map<String, dynamic> data) {
+    if (!mounted) return;
+    final Widget? screen = switch (data['type']) {
+      'friend_request' => const FriendsScreen(),
+      'date_change' => switch (data['item_type']) {
+        'menus' => const WeeklyMenuScreen(),
+        'trainings' => const WeeklyTrainingScreen(),
+        _ => const WeeklyTasksScreen(),
+      },
+      _ => null,
+    };
+    if (screen == null) return;
+    final nav = Navigator.of(context);
+    nav.popUntil((route) => route.isFirst);
+    nav.push(MaterialPageRoute(builder: (_) => screen));
+  }
+
+  /// Al arrancar con la sesión ya abierta (en iPhone la sesión sobrevive a
+  /// desinstalar la app, así que no se pasa por el login):
+  ///  1. si esta BD local nunca se ha sincronizado, restaura desde Firebase
+  ///     lo que falte (no pisa nada de lo que haya en el móvil);
+  ///  2. sube los eventos que se quedaron solo en el móvil.
+  Future<void> _syncCalendarOnStart() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final sync = FirebaseSyncService.instance;
+    try {
+      final restored = await sync.ensureInitialSync(uid);
+      await sync.pushPendingEvents(uid);
+      if (restored && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Datos sincronizados con la nube')),
+        );
+      }
+    } catch (e) {
+      debugPrint('⚠️ Sincronización al arrancar: $e');
+    }
   }
 
   Future<void> _loadSettings() async {
@@ -117,6 +173,8 @@ class _MenuScreenState extends State<MenuScreen> {
 
   @override
   void dispose() {
+    final push = PushNotificationService.instance;
+    if (push.onOpenFromPush == _openFromPush) push.onOpenFromPush = null;
     super.dispose();
   }
 

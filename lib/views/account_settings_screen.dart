@@ -4,6 +4,9 @@
 // Incluye la ELIMINACIÓN DE CUENTA dentro de la app, obligatoria para
 // publicar en App Store (guía 5.1.1(v)) y Google Play, el acceso a Premium
 // y las "Opciones de privacidad" de anuncios (obligatorias con UMP en la UE).
+//
+// NUEVO: "Sincronizar datos" → comprueba que el móvil y la nube coinciden
+// (ver SyncScreen / SyncCheckService).
 
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -12,6 +15,7 @@ import 'package:nornapp/core/monetization/consent_service.dart';
 import 'package:nornapp/core/monetization/premium_service.dart';
 import 'package:nornapp/views/loginBody.dart';
 import 'package:nornapp/views/premium/paywall_screen.dart';
+import 'package:nornapp/views/sync_screen.dart';
 
 class AccountSettingsScreen extends StatefulWidget {
   const AccountSettingsScreen({super.key});
@@ -149,6 +153,12 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
     ).push(MaterialPageRoute(builder: (_) => const PaywallScreen()));
   }
 
+  void _openSync() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const SyncScreen()));
+  }
+
   void _snack(String msg, {bool error = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -198,6 +208,18 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                 ),
                 const Divider(),
 
+                // ── Datos (NUEVO) ──────────────────────────────────────────
+                ListTile(
+                  leading: const Icon(Icons.sync),
+                  title: const Text('Sincronizar datos'),
+                  subtitle: const Text(
+                    'Comprueba que el móvil y la nube coinciden',
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: _openSync,
+                ),
+                const Divider(),
+
                 // ── Cuenta ─────────────────────────────────────────────────
                 ListTile(
                   leading: const Icon(Icons.lock_reset),
@@ -223,8 +245,8 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                           subtitle: const Text(
                             'Cambia tu consentimiento de anuncios',
                           ),
-                          onTap: () => ConsentService.instance
-                              .showPrivacyOptionsForm(),
+                          onTap: () =>
+                              ConsentService.instance.showPrivacyOptionsForm(),
                         )
                       : const SizedBox.shrink(),
                 ),

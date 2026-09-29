@@ -162,6 +162,11 @@ class AccountService {
     // Copia del diario
     await _deleteQuery(_db.collection('users').doc(uid).collection('diary'));
 
+    // NUEVO: copia privada de los eventos "Solo para mí"
+    await _deleteQuery(
+      _db.collection('users').doc(uid).collection('private_events'),
+    );
+
     // Perfil público (email, nombre, tokens FCM)
     await _db.collection('user_profiles').doc(uid).delete();
   }

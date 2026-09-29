@@ -20,7 +20,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _legacyDbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 23
+  static const int _dbVersion = DBSchema.version; // 24
   Database? _database;
   String? _openedForUid;
 
@@ -84,10 +84,27 @@ class DBProvider {
     );
     await _ensureWeeklyTasksColumns(db); // ← red de seguridad idempotente
     await _ensureWeeklyTrainingsTable(db); // ← red de seguridad idempotente
+    await _ensureWeeklyTrainingsColumns(db); // ← NUEVO: image_data (v24)
     await _ensureFunContentSchema(db); // ← red de seguridad idempotente
     await _ensureDismissedSharedTable(db); // ← red de seguridad idempotente
     await _ensureDateChangeTables(db); // ← red de seguridad idempotente
     return db;
+  }
+
+  /// Añade [column] a [table] solo si no existe. Idempotente: se puede llamar
+  /// en cada arranque sin riesgo (un ALTER sobre una columna que ya existe
+  /// haría fallar la apertura de la BD).
+  Future<void> _addColumnIfMissing(
+    Database db,
+    String table,
+    String column,
+    String definition,
+  ) async {
+    final cols = await db.rawQuery('PRAGMA table_info($table)');
+    final names = cols.map((c) => c['name'] as String).toSet();
+    if (names.contains(column)) return;
+    await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
+    debugPrint('🛠️ Columna $column añadida a $table');
   }
 
   Future<void> _ensureWeeklyTasksColumns(Database db) async {
@@ -122,6 +139,23 @@ class DBProvider {
       await db.execute(DBSchema.createWeeklyTrainings);
       debugPrint('🛠️ Tabla weekly_trainings creada (red de seguridad)');
     }
+  }
+
+  /// BUG CORREGIDO ("Añadir entrenamiento" se quedaba pensando):
+  /// la v24 añadió la imagen a los entrenamientos (image_data), pero faltaba
+  /// la migración que crea esa columna en las BD que ya existían. En esos
+  /// móviles cada guardado fallaba con "table weekly_trainings has no column
+  /// named image_data" y el diálogo nunca se cerraba.
+  ///
+  /// Se hace aquí (y no solo en _onUpgrade) porque los móviles afectados YA
+  /// están en la versión 24: _onUpgrade no se volvería a ejecutar en ellos.
+  Future<void> _ensureWeeklyTrainingsColumns(Database db) async {
+    await _addColumnIfMissing(
+      db,
+      DBSchema.tableWeeklyTrainings,
+      'image_data',
+      "TEXT NOT NULL DEFAULT ''",
+    );
   }
 
   /// Si las tablas de contenido diario tienen el esquema antiguo (sin las
@@ -368,6 +402,18 @@ class DBProvider {
         case 23:
           await db.execute(DBSchema.createPendingDateChanges);
           debugPrint('Migración v23: tabla pending_date_changes creada');
+          break;
+        // ── v24: imagen en weekly_trainings (FALTABA) ───────────────────────
+        // Idempotente: si la tabla ya se creó con la columna (p. ej. por la
+        // red de seguridad), no hace nada.
+        case 24:
+          await _addColumnIfMissing(
+            db,
+            DBSchema.tableWeeklyTrainings,
+            'image_data',
+            "TEXT NOT NULL DEFAULT ''",
+          );
+          debugPrint('Migración v24: image_data en weekly_trainings');
           break;
       }
     }
