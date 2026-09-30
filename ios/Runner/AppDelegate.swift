@@ -10,9 +10,14 @@ import FirebaseMessaging
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
-    // Inicializa Firebase en el lado nativo (necesario para que el puente
-    // APNs -> FCM funcione de forma fiable). Si ya estaba, no se repite.
-    if FirebaseApp.app() == nil {
+    // CORREGIDO (la app se cerraba al abrirla): FirebaseApp.configure() lee
+    // GoogleService-Info.plist de DENTRO de la app. Ese archivo está en la
+    // carpeta ios/Runner pero no añadido al proyecto de Xcode, así que no se
+    // incluye en la app y configure() provocaba un cierre inmediato.
+    // Ahora solo se llama si el archivo está; si no, Firebase se inicia desde
+    // Dart (main.dart → DefaultFirebaseOptions), como siempre.
+    if FirebaseApp.app() == nil,
+       Bundle.main.path(forResource: "GoogleService-Info", ofType: "plist") != nil {
       FirebaseApp.configure()
     }
 
@@ -30,14 +35,16 @@ import FirebaseMessaging
   }
 
   // Entrega el token APNs a Firebase Messaging.
-  // CORREGIDO: la llamada a super usaba un nombre de método que no existe
-  // ("didRegisterForRemoteNotifications:"); el correcto termina en
-  // "WithDeviceToken".
+  // CORREGIDO: solo si Firebase ya está iniciado (si aún no lo está, el
+  // plugin firebase_messaging recibe el mismo token a través de super y lo
+  // entrega él).
   override func application(
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
-    Messaging.messaging().apnsToken = deviceToken
+    if FirebaseApp.app() != nil {
+      Messaging.messaging().apnsToken = deviceToken
+    }
     super.application(
       application,
       didRegisterForRemoteNotificationsWithDeviceToken: deviceToken
@@ -46,7 +53,6 @@ import FirebaseMessaging
 
   // Útil para diagnosticar: si APNs falla al registrar, lo verás en los logs
   // de Xcode (típico: falta la capacidad "Push Notifications").
-  // CORREGIDO: igual que arriba, el nombre correcto termina en "WithError".
   override func application(
     _ application: UIApplication,
     didFailToRegisterForRemoteNotificationsWithError error: Error

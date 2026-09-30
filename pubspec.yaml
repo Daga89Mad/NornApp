@@ -1,7 +1,7 @@
 name: nornapp
 description: "NornApp - tu calendario familiar inteligente."
 publish_to: 'none'
-version: 1.0.0
+version: 1.0.0+2
 
 environment:
   # google_mobile_ads 8+ exige Dart 3.10 / Flutter 3.38.1

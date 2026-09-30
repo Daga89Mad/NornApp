@@ -58,13 +58,19 @@ class DefaultFirebaseOptions {
     storageBucket: 'familycalendar-a960a.firebasestorage.app',
   );
 
+  // CORREGIDO: la app de iOS se publica como com.YeahSoft.NornApp, pero aquí
+  // seguía la app de Firebase del identificador antiguo
+  // (com.example.familycalendar). Ahora usa la misma que
+  // ios/Runner/GoogleService-Info.plist. Importante para las notificaciones:
+  // el token FCM del iPhone tiene que pertenecer a la app de Firebase cuyo
+  // identificador coincide con el de la app instalada.
   static const FirebaseOptions ios = FirebaseOptions(
     apiKey: 'AIzaSyB-HDzvrYkA6vi82DokobdaMoXjHzXAfZY',
-    appId: '1:469298655595:ios:a0aa66f48ced3b71945c2e',
+    appId: '1:469298655595:ios:3c20246d2e5df144945c2e',
     messagingSenderId: '469298655595',
     projectId: 'familycalendar-a960a',
     storageBucket: 'familycalendar-a960a.firebasestorage.app',
-    iosBundleId: 'com.example.familycalendar',
+    iosBundleId: 'com.YeahSoft.NornApp',
   );
 
   static const FirebaseOptions macos = FirebaseOptions(
