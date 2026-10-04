@@ -256,6 +256,54 @@ class ExpenseRepository {
     await _commit(last);
   }
 
+  /// Periodos (proyectos) que existen de la serie de [project], él incluido.
+  /// Si no es periódico devuelve solo [project].
+  Future<List<ExpenseProject>> seriesProjects(ExpenseProject project) async {
+    if (project.seriesId.isEmpty) return [project];
+    // Solo se filtra por 'members' (la misma consulta que la lista de
+    // proyectos): combinarla con 'series_id' exigiría un índice compuesto.
+    final snap = await _projects.where('members', arrayContains: uid).get();
+    final list = snap.docs
+        .map(ExpenseProject.fromDoc)
+        .where((p) => p.seriesId == project.seriesId)
+        .toList();
+    if (!list.any((p) => p.id == project.id)) list.add(project);
+    return list;
+  }
+
+  /// Borra TODOS los periodos de la serie de [project] (con sus gastos) y la
+  /// propia serie, para que no se creen más. Solo el dueño.
+  /// Devuelve cuántos periodos se han borrado.
+  Future<int> deleteSeries(ExpenseProject project) async {
+    if (project.seriesId.isEmpty) {
+      await deleteProject(project);
+      return 1;
+    }
+    // 1) Se detiene ANTES de buscar los periodos: así nadie crea uno nuevo
+    //    mientras se borran. Si la serie ya no existe, no pasa nada.
+    try {
+      await stopSeries(project.seriesId);
+    } catch (e) {
+      debugPrint('⚠️ No se pudo detener la serie ${project.seriesId}: $e');
+    }
+
+    // 2) Todos los periodos, con sus gastos.
+    final periods = await seriesProjects(project);
+    for (final p in periods) {
+      await deleteProject(p);
+    }
+
+    // 3) La propia serie. Si falla no es grave: ya está detenida.
+    try {
+      final batch = _db.batch();
+      batch.delete(_series.doc(project.seriesId));
+      await _commit(batch);
+    } catch (e) {
+      debugPrint('⚠️ No se pudo borrar la serie ${project.seriesId}: $e');
+    }
+    return periods.length;
+  }
+
   /// Un miembro (no dueño) abandona el proyecto y sus próximos periodos.
   Future<void> leaveProject(ExpenseProject project) async {
     if (uid.isEmpty || project.isOwner(uid)) return;

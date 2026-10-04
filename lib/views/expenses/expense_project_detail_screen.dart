@@ -16,6 +16,7 @@ import '../../core/week_dates.dart';
 import '../../models/expense_models.dart';
 import 'expense_project_form_screen.dart';
 import 'expense_widgets.dart';
+import '../delete_series_dialog.dart';
 
 class ExpenseProjectDetailScreen extends StatefulWidget {
   final String projectId;
@@ -48,6 +49,9 @@ class _ExpenseProjectDetailScreenState
   bool _seriesRequested = false;
   String _lastReconcile = '';
   bool _closing = false;
+
+  /// Borrando un proyecto periódico (puede tardar): se muestra un indicador.
+  bool _deleting = false;
 
   /// Gastos borrados con el gesto de deslizar, ocultos hasta que llega la
   /// confirmación de Firestore (Dismissible exige quitarlos al instante).
@@ -200,59 +204,101 @@ class _ExpenseProjectDetailScreenState
   }
 
   Future<void> _confirmDelete(ExpenseProject p) async {
-    var stopToo = p.isRecurring && _seriesActive == true;
+    // NUEVO: proyecto periódico → "solo este periodo" o "toda la serie".
+    if (p.isRecurring) {
+      await _confirmDeleteRecurring(p);
+      return;
+    }
+
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          title: const Text('Eliminar proyecto'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Se borrarán "${p.title}" y sus ${p.expenseCount} gastos '
-                'para todos los miembros.',
-              ),
-              if (p.isRecurring && _seriesActive == true) ...[
-                const SizedBox(height: 8),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  value: stopToo,
-                  activeColor: ExpenseColors.primary,
-                  onChanged: (v) => setS(() => stopToo = v ?? false),
-                  title: const Text('Detener también los próximos periodos'),
-                ),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text(
-                'Eliminar',
-                style: TextStyle(
-                  color: ExpenseColors.negative,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ),
-          ],
+      builder: (ctx) => AlertDialog(
+        title: const Text('Eliminar proyecto'),
+        content: Text(
+          'Se borrarán "${p.title}" y sus ${p.expenseCount} gastos '
+          'para todos los miembros.',
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Eliminar',
+              style: TextStyle(
+                color: ExpenseColors.negative,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
     if (ok != true) return;
     _closing = true;
     try {
-      await _repo.deleteProject(p, alsoStopSeries: stopToo);
+      await _repo.deleteProject(p);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       _closing = false;
+      _snack('No se pudo eliminar: $e', error: true);
+    }
+  }
+
+  /// Borrado de un proyecto periódico: solo este periodo (los demás se
+  /// conservan y se siguen creando los próximos) o toda la serie (todos los
+  /// periodos con sus gastos, y no se crean más).
+  Future<void> _confirmDeleteRecurring(ExpenseProject p) async {
+    List<ExpenseProject> periods;
+    try {
+      periods = await _repo.seriesProjects(p);
+    } catch (e) {
+      debugPrint('⚠️ No se pudieron contar los periodos: $e');
+      periods = [p];
+    }
+    if (!mounted) return;
+    final n = periods.length;
+    final active = _seriesActive == true;
+    final scope = await askDeleteScope(
+      context,
+      title: p.title,
+      count: n,
+      onlyLabel: 'Solo este periodo',
+      message:
+          'Es un proyecto periódico ($n ${n == 1 ? 'periodo' : 'periodos'} '
+          'hasta ahora). ¿Qué quieres borrar?',
+      detail:
+          '· Solo este periodo: se borran "${p.title}" y sus '
+          '${p.expenseCount} gastos; los demás periodos se conservan'
+          '${active ? ' y se seguirán creando los próximos' : ''}.\n'
+          '· Toda la serie: se borran todos los periodos y sus gastos para '
+          'todos los miembros${active ? ', y no se crearán más' : ''}.',
+    );
+    if (scope == null || !mounted) return;
+
+    // Con muchos periodos tarda: se muestra un indicador y se bloquea la
+    // pantalla para que no se pueda tocar nada mientras tanto.
+    setState(() {
+      _closing = true;
+      _deleting = true;
+    });
+    try {
+      if (scope == DeleteScope.series) {
+        final deleted = await _repo.deleteSeries(p);
+        debugPrint('🗑️ Serie de gastos borrada: $deleted periodos');
+      } else {
+        await _repo.deleteProject(p);
+      }
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _closing = false;
+          _deleting = false;
+        });
+      }
       _snack('No se pudo eliminar: $e', error: true);
     }
   }
@@ -267,6 +313,7 @@ class _ExpenseProjectDetailScreenState
       stream: _projectStream,
       initialData: widget.initial,
       builder: (context, ps) {
+        if (_deleting) return _message(null);
         if (_closing) return _message('');
         if (ps.hasError) {
           return _message('No tienes acceso a este proyecto');

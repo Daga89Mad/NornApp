@@ -13,6 +13,7 @@ import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
 import 'week_dates.dart';
 import 'recurrence_rule.dart';
+import 'series_id.dart';
 
 class WeeklyTrainingRepository {
   WeeklyTrainingRepository._();
@@ -263,24 +264,57 @@ class WeeklyTrainingRepository {
         .skip(1) // la primera es el propio entry
         .toList();
 
+    // NUEVO: cada repetición lleva el id del original + '__rN' (SeriesId),
+    // para poder borrar después "solo esta" o "toda la serie".
     // En tandas pequeñas: más rápido que de uno en uno sin saturar Firestore.
     const chunk = 8;
     for (var i = 0; i < dates.length; i += chunk) {
-      final slice = dates.skip(i).take(chunk);
-      await Future.wait(
-        slice.map(
-          (d) => save(
+      final end = i + chunk < dates.length ? i + chunk : dates.length;
+      await Future.wait([
+        for (var j = i; j < end; j++)
+          save(
             entry.copyWith(
-              id: generateId(),
-              date: d.millisecondsSinceEpoch,
+              id: SeriesId.copyId(entry.id, j + 1),
+              date: dates[j].millisecondsSinceEpoch,
               isDone: false,
               synced: 0,
             ),
           ),
-        ),
-      );
+      ]);
     }
     return dates.length + 1;
+  }
+
+  /// Ids (en este móvil) de todas las repeticiones de la serie a la que
+  /// pertenece [entry], él incluido. Si no es una serie devuelve [entry.id].
+  /// Las series se reconocen por el id (original + '__rN', ver SeriesId); las
+  /// creadas antes de este cambio no dejan rastro y se tratan como sueltas.
+  Future<List<String>> seriesIdsOf(WeeklyTrainingEntry entry) async {
+    final (where, args) = SeriesId.sqlWhere(entry.id);
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTrainings,
+      where: where,
+      whereArgs: args,
+    );
+    final dismissed = await DismissedSharedService.instance.idsForType(
+      'trainings',
+    );
+    final ids = <String>{
+      for (final r in rows)
+        if (!dismissed.contains(r['id'])) r['id'] as String,
+    }..add(entry.id);
+    return ids.toList();
+  }
+
+  /// Borra todas las repeticiones de la serie de [entry] (ver [seriesIdsOf]).
+  /// Cada una se borra igual que con [delete]: las propias de verdad y las
+  /// compartidas por otra persona solo se ocultan. Devuelve cuántas.
+  Future<int> deleteSeries(WeeklyTrainingEntry entry) async {
+    final ids = await seriesIdsOf(entry);
+    for (final id in ids) {
+      await delete(id);
+    }
+    return ids.length;
   }
 
   Future<void> delete(String id) async {

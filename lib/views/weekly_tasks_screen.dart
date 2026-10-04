@@ -13,6 +13,7 @@ import 'week_day_picker.dart';
 import '../core/week_dates.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'delete_series_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -815,7 +816,21 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               if (!isForeign)
                 TextButton(
                   onPressed: () async {
-                    await _repo.delete(task.id);
+                    // NUEVO: si se repite, preguntar "solo este" o "toda la serie".
+                    final ids = await _repo.seriesIdsOf(task);
+                    if (!ctx.mounted) return;
+                    final scope = await askDeleteScopeIfSeries(
+                      ctx,
+                      title: task.title,
+                      count: ids.length,
+                      onlyLabel: 'Solo esta tarea',
+                    );
+                    if (scope == null) return;
+                    if (scope == DeleteScope.series) {
+                      await _repo.deleteSeries(task);
+                    } else {
+                      await _repo.delete(task.id);
+                    }
                     if (ctx.mounted) Navigator.pop(ctx);
                     _loadWeek();
                   },

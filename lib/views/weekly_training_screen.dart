@@ -12,6 +12,7 @@ import '../core/week_dates.dart';
 import '../core/weekly_share_service.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'delete_series_dialog.dart';
 import 'image_helpers.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -678,7 +679,21 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
             if (!isForeign)
               TextButton(
                 onPressed: () async {
-                  await _repo.delete(entry.id);
+                  // NUEVO: si se repite, preguntar "solo este" o "toda la serie".
+                  final ids = await _repo.seriesIdsOf(entry);
+                  if (!ctx.mounted) return;
+                  final scope = await askDeleteScopeIfSeries(
+                    ctx,
+                    title: entry.title,
+                    count: ids.length,
+                    onlyLabel: 'Solo este entrenamiento',
+                  );
+                  if (scope == null) return;
+                  if (scope == DeleteScope.series) {
+                    await _repo.deleteSeries(entry);
+                  } else {
+                    await _repo.delete(entry.id);
+                  }
                   if (ctx.mounted) Navigator.pop(ctx);
                   _loadWeek();
                 },

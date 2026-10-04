@@ -12,6 +12,7 @@ import 'shared_date_override_service.dart';
 import 'date_change_service.dart';
 import 'week_dates.dart';
 import 'recurrence_rule.dart';
+import 'series_id.dart';
 
 class WeeklyTaskRepository {
   WeeklyTaskRepository._();
@@ -493,23 +494,127 @@ class WeeklyTaskRepository {
         .skip(1) // la primera es la propia tarea
         .toList();
 
+    // NUEVO: cada repetición lleva el id del original + '__rN' (SeriesId),
+    // para poder borrar después "solo esta" o "toda la serie".
     const chunk = 8;
     for (var i = 0; i < dates.length; i += chunk) {
-      final slice = dates.skip(i).take(chunk);
-      await Future.wait(
-        slice.map(
-          (d) => save(
+      final end = i + chunk < dates.length ? i + chunk : dates.length;
+      await Future.wait([
+        for (var j = i; j < end; j++)
+          save(
             base.copyWith(
-              id: generateId(),
-              date: d.millisecondsSinceEpoch,
+              id: SeriesId.copyId(base.id, j + 1),
+              date: dates[j].millisecondsSinceEpoch,
               isDone: false,
               synced: 0,
             ),
           ),
-        ),
-      );
+      ]);
     }
     return dates.length + 1;
+  }
+
+  /// Ids (en este móvil) de todas las repeticiones de la serie a la que
+  /// pertenece [task], ella incluida. Si no es una serie devuelve [task.id].
+  ///
+  /// · Series nuevas: por el id (original + '__rN', ver SeriesId).
+  /// · Series creadas antes de ese cambio (sin sufijo): ver [_legacySeriesIds].
+  /// Las subtareas nunca forman serie.
+  Future<List<String>> seriesIdsOf(WeeklyTask task) async {
+    if (task.parentId.isNotEmpty) return [task.id];
+
+    final (where, args) = SeriesId.sqlWhere(task.id);
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: "$where AND parent_id = ''",
+      whereArgs: args,
+    );
+    final ids = <String>{for (final r in rows) r['id'] as String};
+
+    // Solo si no es una serie nueva.
+    if (ids.length <= 1 && !task.id.contains(SeriesId.separator)) {
+      ids.addAll(await _legacySeriesIds(task));
+    }
+
+    final dismissed = await DismissedSharedService.instance.idsForType('tasks');
+    ids
+      ..removeWhere(dismissed.contains)
+      ..add(task.id);
+    return ids.toList();
+  }
+
+  /// Series creadas antes de marcar las repeticiones en el id. Sus copias
+  /// comparten título, dueño y la misma regla `recurrence` (que incluye la
+  /// fecha final). Para no mezclar dos series distintas con el mismo nombre
+  /// (p. ej. "Gimnasio" cada lunes y otra cada miércoles), solo se cuentan
+  /// las que caen en el mismo ritmo que [task]: mismo día del mes si es
+  /// mensual, o a un número exacto de pasos (1, 7, 14 o N días) si no.
+  Future<Set<String>> _legacySeriesIds(WeeklyTask task) async {
+    final rule = RecurrenceRule.decode(task.recurrence);
+    if (rule.isNone) return {};
+
+    final rows = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where:
+          "recurrence = ? AND title = ? AND owner_id = ? AND parent_id = '' "
+          "AND instr(id, ?) = 0",
+      whereArgs: [task.recurrence, task.title, task.ownerId, SeriesId.separator],
+    );
+
+    // Originales de series nuevas: no son de esta serie antigua.
+    final newRoots = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'title = ? AND owner_id = ? AND instr(id, ?) > 0',
+      whereArgs: [task.title, task.ownerId, SeriesId.separator],
+    );
+    final excluded = {
+      for (final r in newRoots) SeriesId.rootOf(r['id'] as String),
+    };
+
+    final int step;
+    switch (rule.freq) {
+      case RecurrenceFreq.daily:
+        step = 1;
+        break;
+      case RecurrenceFreq.weekly:
+        step = 7;
+        break;
+      case RecurrenceFreq.biweekly:
+        step = 14;
+        break;
+      case RecurrenceFreq.everyNDays:
+        step = rule.interval < 1 ? 1 : rule.interval;
+        break;
+      case RecurrenceFreq.monthly:
+      case RecurrenceFreq.none:
+        step = 0;
+        break;
+    }
+
+    final base = DateTime.fromMillisecondsSinceEpoch(task.date);
+    final out = <String>{};
+    for (final r in rows) {
+      final id = r['id'] as String;
+      if (excluded.contains(id)) continue;
+      final d = DateTime.fromMillisecondsSinceEpoch(r['date'] as int);
+      final sameRhythm = rule.freq == RecurrenceFreq.monthly
+          ? d.day == base.day
+          : daysBetween(base, d) % step == 0;
+      if (sameRhythm) out.add(id);
+    }
+    return out;
+  }
+
+  /// Borra todas las repeticiones de la serie de [task] (ver [seriesIdsOf]).
+  /// Cada una se borra igual que con [delete]: las propias de verdad (con sus
+  /// subtareas) y las compartidas por otra persona solo se ocultan.
+  /// Devuelve cuántas se han borrado.
+  Future<int> deleteSeries(WeeklyTask task) async {
+    final ids = await seriesIdsOf(task);
+    for (final id in ids) {
+      await delete(id);
+    }
+    return ids.length;
   }
 
   /// Mueve una tarea a otro día. Arrastra sus subtareas.

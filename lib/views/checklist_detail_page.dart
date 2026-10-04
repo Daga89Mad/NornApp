@@ -6,6 +6,7 @@ import '../models/checklist_item.dart';
 import '../core/checklist_repository.dart';
 import '../core/event_repository.dart';
 import 'day_view.dart'; // AddEventDialog
+import 'delete_series_dialog.dart';
 
 class ChecklistDetailPage extends StatefulWidget {
   final EventItem event;
@@ -138,6 +139,39 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
   // ── Borrar ─────────────────────────────────────────────────────────────────
 
   Future<void> _confirmDelete() async {
+    // NUEVO: si el evento se repite, se pregunta si borrar solo este o toda
+    // la serie (en lugar de la confirmación normal).
+    if (_event.id != null) {
+      final seriesIds = await EventRepository.instance.seriesIds(_event.id!);
+      if (!mounted) return;
+      if (seriesIds.length > 1) {
+        final scope = await askDeleteScope(
+          context,
+          title: _event.title,
+          count: seriesIds.length,
+          onlyLabel: 'Solo este evento',
+        );
+        if (scope == null || !mounted) return;
+        try {
+          if (scope == DeleteScope.series) {
+            await EventRepository.instance.deleteSeries(_event.id!);
+          } else {
+            await ChecklistRepository.instance.deleteAllForEvent(_event.id!);
+            await EventRepository.instance.delete(_event.id!);
+          }
+          if (mounted) Navigator.of(context).pop({'action': 'deleted'});
+        } catch (e) {
+          debugPrint('Error borrando evento: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Error al borrar: $e')));
+          }
+        }
+        return;
+      }
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(

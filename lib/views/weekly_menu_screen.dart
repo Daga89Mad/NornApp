@@ -14,6 +14,7 @@ import 'date_change_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'delete_series_dialog.dart';
 import '../core/week_dates.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
@@ -725,7 +726,21 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
             if (!isForeign)
               TextButton(
                 onPressed: () async {
-                  await _repo.delete(entry.id);
+                  // NUEVO: si se repite, preguntar "solo este" o "toda la serie".
+                  final ids = await _repo.seriesIdsOf(entry);
+                  if (!ctx.mounted) return;
+                  final scope = await askDeleteScopeIfSeries(
+                    ctx,
+                    title: entry.title,
+                    count: ids.length,
+                    onlyLabel: 'Solo este menú',
+                  );
+                  if (scope == null) return;
+                  if (scope == DeleteScope.series) {
+                    await _repo.deleteSeries(entry);
+                  } else {
+                    await _repo.delete(entry.id);
+                  }
                   if (ctx.mounted) Navigator.pop(ctx);
                   _loadWeek();
                 },

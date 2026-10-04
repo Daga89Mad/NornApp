@@ -1,4 +1,5 @@
 // lib/core/event_repository.dart
+import 'dart:async';
 import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +8,7 @@ import 'alarm_service.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 import 'firebase_sync_service.dart';
+import 'series_id.dart';
 
 class EventRepository {
   EventRepository._();
@@ -210,6 +212,50 @@ class EventRepository {
     );
     await FirebaseSyncService.instance.deleteEvent(id);
     debugPrint('🗑️ Evento eliminado: $id');
+  }
+
+  // ── Series (eventos repetidos) ─────────────────────────────────────────────
+
+  /// Ids (en este móvil) de todas las repeticiones de la serie a la que
+  /// pertenece el evento [id], él incluido. Si no es una serie devuelve [id].
+  /// Las series se reconocen por el id (original + '__rN', ver SeriesId); los
+  /// eventos repetidos antes de este cambio no dejan rastro y van sueltos.
+  Future<List<String>> seriesIds(String id) async {
+    final (where, args) = SeriesId.sqlWhere(id);
+    final rows = await DBProvider.db.query(
+      DBSchema.tableEvents,
+      where: where,
+      whereArgs: args,
+    );
+    final ids = <String>{for (final r in rows) r['id'] as String}..add(id);
+    return ids.toList();
+  }
+
+  /// Borra todas las repeticiones de la serie del evento [id], con sus
+  /// checklists y alarmas. En el móvil se borran al momento; en la nube se
+  /// borran después sin esperar (con muchas repeticiones esperar a cada una
+  /// dejaría la pantalla bloqueada, y sin conexión Firestore las deja en
+  /// cola). Devuelve cuántos eventos se han borrado.
+  Future<int> deleteSeries(String id) async {
+    final ids = await seriesIds(id);
+    for (final eid in ids) {
+      await AlarmService.instance.cancelAll(eid);
+      await DBProvider.db.delete(
+        DBSchema.tableChecklist,
+        where: 'event_id = ?',
+        whereArgs: [eid],
+      );
+      await DBProvider.db.delete(
+        DBSchema.tableEvents,
+        where: 'id = ?',
+        whereArgs: [eid],
+      );
+    }
+    for (final eid in ids) {
+      unawaited(FirebaseSyncService.instance.deleteEvent(eid));
+    }
+    debugPrint('🗑️ Serie de ${ids.length} eventos eliminada');
+    return ids.length;
   }
 
   Future<void> deleteAllForDay(DateTime day) async {

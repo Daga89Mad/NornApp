@@ -16,8 +16,10 @@ import '../core/fun_content_repository.dart';
 import '../models/calendar_category.dart';
 import '../core/category_repository.dart';
 import '../core/recurrence_rule.dart';
+import '../core/series_id.dart';
 import '../core/week_dates.dart';
 import 'recurrence_picker.dart';
+import 'delete_series_dialog.dart';
 
 class DayView extends StatefulWidget {
   final DateTime date;
@@ -257,7 +259,7 @@ class _DayViewState extends State<DayView> {
         final items = tipo == Tipo.Checklist
             ? ((result['checklistItems'] as List<String>?) ?? const <String>[])
             : const <String>[];
-        await _createRecurringCopies(newEvent, rule, items);
+        await _createRecurringCopies(newEvent, saved.id!, rule, items);
       }
       return saved;
     } catch (e) {
@@ -272,10 +274,14 @@ class _DayViewState extends State<DayView> {
   }
 
   /// Crea una copia del evento en cada fecha de [rule] (la primera, que es
-  /// el propio día, ya está guardada). Las alarmas y notificaciones se
-  /// desplazan los mismos días que el evento.
+  /// el propio día, ya está guardada con el id [rootId]). Las alarmas y
+  /// notificaciones se desplazan los mismos días que el evento.
+  ///
+  /// NUEVO: cada copia lleva el id del original + '__rN' (SeriesId), para
+  /// poder borrar después "solo este" o "toda la serie".
   Future<void> _createRecurringCopies(
     EventItem base,
+    String rootId,
     RecurrenceRule rule,
     List<String> checklistItems,
   ) async {
@@ -300,13 +306,13 @@ class _DayViewState extends State<DayView> {
             dt.minute,
           ); // aritmética de calendario: no se mueve con el cambio de hora
 
-    Future<void> saveOne(DateTime d) async {
+    Future<void> saveOne(DateTime d, int index) async {
       final offset = daysBetween(widget.date, d);
       final copy = base.copyWith(
+        id: SeriesId.copyId(rootId, index),
         alarmAt: shift(base.alarmAt, offset),
         notificationAt: shift(base.notificationAt, offset),
       );
-      // base.id es null → EventRepository genera un id nuevo para cada copia.
       final saved = await EventRepository.instance.save(copy, d);
       if (saved.id != null && checklistItems.isNotEmpty) {
         await ChecklistRepository.instance.saveAll(saved.id!, checklistItems);
@@ -316,18 +322,20 @@ class _DayViewState extends State<DayView> {
     int ok = 0;
     const chunk = 6;
     for (var i = 0; i < dates.length; i += chunk) {
-      final slice = dates.skip(i).take(chunk).toList();
-      final results = await Future.wait(
-        slice.map((d) async {
-          try {
-            await saveOne(d);
-            return true;
-          } catch (e) {
-            debugPrint('⚠️ Repetición del ${d.toIso8601String()} falló: $e');
-            return false;
-          }
-        }),
-      );
+      final end = i + chunk < dates.length ? i + chunk : dates.length;
+      final results = await Future.wait([
+        for (var j = i; j < end; j++)
+          () async {
+            final d = dates[j];
+            try {
+              await saveOne(d, j + 1);
+              return true;
+            } catch (e) {
+              debugPrint('⚠️ Repetición del ${d.toIso8601String()} falló: $e');
+              return false;
+            }
+          }(),
+      ]);
       ok += results.where((r) => r).length;
     }
 
@@ -347,6 +355,41 @@ class _DayViewState extends State<DayView> {
     final event = _events[idx];
     if (event.id == null) return;
 
+    // NUEVO: si el evento se repite, se pregunta si borrar solo este o toda
+    // la serie (en lugar de la confirmación normal).
+    final seriesIds = await EventRepository.instance.seriesIds(event.id!);
+    if (!mounted) return;
+    if (seriesIds.length > 1) {
+      final scope = await askDeleteScope(
+        context,
+        title: event.title,
+        count: seriesIds.length,
+        onlyLabel: 'Solo este evento',
+      );
+      if (scope == null || !mounted) return;
+      if (scope == DeleteScope.series) {
+        try {
+          final n = await EventRepository.instance.deleteSeries(event.id!);
+          if (!mounted) return;
+          setState(() => _events.removeWhere((e) => seriesIds.contains(e.id)));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Serie borrada ($n eventos)')),
+          );
+        } catch (e) {
+          debugPrint('Error eliminando la serie: $e');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('No se pudo borrar la serie: $e')),
+            );
+          }
+        }
+        return;
+      }
+      // Solo este: se borra igual que un evento suelto (sin volver a preguntar).
+      await _deleteOneEvent(event);
+      return;
+    }
+
     final shouldDelete = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -365,13 +408,19 @@ class _DayViewState extends State<DayView> {
       ),
     );
     if (shouldDelete != true) return;
+    await _deleteOneEvent(event);
+  }
 
+  /// Borra un único evento (y su checklist, si lo tiene).
+  Future<void> _deleteOneEvent(EventItem event) async {
     try {
       if (event.tipo == Tipo.Checklist) {
         await ChecklistRepository.instance.deleteAllForEvent(event.id!);
       }
       await EventRepository.instance.delete(event.id!);
-      if (mounted) setState(() => _events.removeAt(idx));
+      if (mounted) {
+        setState(() => _events.removeWhere((e) => e.id == event.id));
+      }
     } catch (e) {
       debugPrint('Error eliminando evento: $e');
     }
