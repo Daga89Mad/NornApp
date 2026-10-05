@@ -34,11 +34,11 @@
 	<false/>
 
 	<!-- ── AdMob ──
-	     App ID de iOS (con '~'). ⚠️ Sustituye por el tuyo: AdMob → Apps →
-	     NornApp (iOS) → Configuración de la app. Si falta, la app se cierra
-	     al arrancar. Este es el ID de PRUEBA de Google. -->
+	     App ID de iOS de la cuenta pub-1041809144169910 (AdMob → Apps →
+	     NornApp iOS). No confundir con el de Android (~6420046996).
+	     Si el valor falta o está mal escrito, la app se cierra al abrir. -->
 	<key>GADApplicationIdentifier</key>
-	<string>ca-app-pub-3940256099942544~1458002511</string>
+	<string>ca-app-pub-1041809144169910~1303451687</string>
 
 	<!-- ── App Tracking Transparency (anuncios personalizados) ──
 	     Texto del aviso del sistema. Debe explicar para qué se usa, sin
@@ -57,13 +57,17 @@
 			<string>cstr6suwn9.skadnetwork</string>
 		</dict>
 	</array>
-<!-- ── Galería de fotos ── -->
+	<!-- ── Galería de fotos ──
+	     Apple (5.1.1) rechaza textos que no describen TODOS los usos reales:
+	     la galería se usa para la foto de perfil y las imágenes de entrenos. -->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>NornApp necesita acceso a tus fotos para que puedas elegir una imagen de perfil desde la galería.</string>
+	<string>NornApp usa tus fotos solo cuando eliges una imagen para tu perfil o para un entrenamiento. Por ejemplo, puedes poner una foto tuya como imagen de perfil.</string>
 
-	<!-- ── Permisos de cámara (QR scanner) ── -->
+	<!-- ── Cámara ──
+	     CORREGIDO: antes decía que la cámara solo se usaba para el QR, pero
+	     image_helpers.dart también permite "Hacer una foto". -->
 	<key>NSCameraUsageDescription</key>
-	<string>NornApp usa la cámara únicamente para escanear el código QR de otro usuario y añadirlo como amigo. Las imágenes no se guardan ni se envían.</string>
+	<string>NornApp usa la cámara para escanear el código QR de otra persona y añadirla como contacto, y para hacer una foto de perfil o de un entrenamiento si tú lo eliges. Las imágenes del QR no se guardan.</string>
 
 	<!-- ── Notificaciones push ──
 	     Solo 'remote-notification'. Se ha quitado 'fetch' porque la app no

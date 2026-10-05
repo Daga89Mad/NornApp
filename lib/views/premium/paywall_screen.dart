@@ -18,8 +18,13 @@ import '../../core/monetization/premium_service.dart';
 class LegalLinks {
   LegalLinks._();
 
-  /// ⚠️ Pon la URL real de tu política de privacidad (la misma que en las fichas).
-  static const String privacyPolicy = 'https://TU-DOMINIO/privacidad';
+  /// Política de privacidad (la MISMA URL que en App Store Connect y Play).
+  static const String privacyPolicy =
+      'https://daga89mad.github.io/nornapp-legal/';
+
+  /// Cómo eliminar la cuenta sin la app (Play lo exige en "Seguridad de datos").
+  static const String deleteAccount =
+      'https://daga89mad.github.io/eliminar-cuenta.html';
 
   /// EULA estándar de Apple. Si tienes términos propios, pon su URL.
   static const String termsOfUse =
@@ -133,23 +138,38 @@ class _PaywallScreenState extends State<PaywallScreen> {
         const SizedBox(height: 20),
 
         // Planes
-        ValueListenableBuilder<List<ProductDetails>>(
-          valueListenable: _premium.products,
-          builder: (context, products, _) {
-            if (!_premium.storeAvailable && products.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.symmetric(vertical: 24),
-                child: Text(
-                  'La tienda no está disponible ahora mismo. '
-                  'Inténtalo más tarde.',
-                  textAlign: TextAlign.center,
-                ),
-              );
-            }
-            if (products.isEmpty) {
+        AnimatedBuilder(
+          animation: Listenable.merge([
+            _premium.products,
+            _premium.productsLoaded,
+          ]),
+          builder: (context, _) {
+            final products = _premium.products.value;
+            if (products.isEmpty && !_premium.productsLoaded.value) {
               return const Padding(
                 padding: EdgeInsets.symmetric(vertical: 24),
                 child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            if (products.isEmpty) {
+              // Nunca dejar un spinner infinito: Apple lo rechaza (guía 2.1).
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Las suscripciones no están disponibles ahora mismo. '
+                      'Comprueba tu conexión e inténtalo de nuevo.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      onPressed: _premium.loadProducts,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Reintentar'),
+                    ),
+                  ],
+                ),
               );
             }
             return Column(
@@ -185,9 +205,16 @@ class _PaywallScreenState extends State<PaywallScreen> {
         const SizedBox(height: 16),
 
         // Botón comprar
-        ValueListenableBuilder<bool>(
-          valueListenable: _premium.purchasePending,
-          builder: (context, pending, _) {
+        // CORREGIDO: escucha también los productos. Antes solo escuchaba
+        // purchasePending y el botón seguía deshabilitado al llegar los
+        // precios hasta que el usuario tocaba un plan.
+        AnimatedBuilder(
+          animation: Listenable.merge([
+            _premium.purchasePending,
+            _premium.products,
+          ]),
+          builder: (context, _) {
+            final pending = _premium.purchasePending.value;
             final products = _premium.products.value;
             final selected = products
                 .where((p) => p.id == _selectedId)

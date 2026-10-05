@@ -60,6 +60,11 @@ class PremiumService {
   final ValueNotifier<List<ProductDetails>> products =
       ValueNotifier<List<ProductDetails>>(const []);
 
+  /// true cuando ya se ha consultado la tienda (haya productos o no).
+  /// Evita que el paywall se quede cargando para siempre si los productos aún
+  /// no están aprobados o la tienda no responde (Apple lo rechaza, guía 2.1).
+  final ValueNotifier<bool> productsLoaded = ValueNotifier<bool>(false);
+
   /// Hay una compra en curso (para deshabilitar botones).
   final ValueNotifier<bool> purchasePending = ValueNotifier<bool>(false);
 
@@ -77,13 +82,18 @@ class PremiumService {
   // ══════════════════════════════════════════════════════════════════════════
 
   Future<void> init() async {
-    if (_sub != null || !AdConfig.isSupported) return;
+    if (_sub != null) return;
+    if (!AdConfig.isSupported) {
+      productsLoaded.value = true;
+      return;
+    }
 
     final prefs = await SharedPreferences.getInstance();
 
     // ── 3. Interruptor de PRUEBAS (solo debug) ──
     if (!kReleaseMode && (prefs.getBool(_kDebugPremium) ?? false)) {
       isPremium.value = true;
+      productsLoaded.value = true;
       debugPrint('🧪 Premium simulado (modo depuración)');
       return;
     }
@@ -107,6 +117,7 @@ class PremiumService {
 
     storeAvailable = await _iap.isAvailable();
     if (!storeAvailable) {
+      productsLoaded.value = true;
       debugPrint('⚠️ Tienda no disponible');
       return;
     }
@@ -169,24 +180,38 @@ class PremiumService {
   }
 
   Future<void> loadProducts() async {
-    final response = await _iap.queryProductDetails(productIds);
-    if (response.error != null) {
-      debugPrint('❌ Productos: ${response.error}');
+    if (!AdConfig.isSupported) {
+      productsLoaded.value = true;
+      return;
     }
-    if (response.notFoundIDs.isNotEmpty) {
-      debugPrint('⚠️ Productos no encontrados: ${response.notFoundIDs}');
-    }
+    productsLoaded.value = false;
+    try {
+      if (!storeAvailable) storeAvailable = await _iap.isAvailable();
+      if (!storeAvailable) return;
 
-    // En Android puede llegar un ProductDetails por cada oferta: nos quedamos
-    // con el primero de cada ID (el plan base).
-    final byId = <String, ProductDetails>{};
-    for (final p in response.productDetails) {
-      byId.putIfAbsent(p.id, () => p);
+      final response = await _iap.queryProductDetails(productIds);
+      if (response.error != null) {
+        debugPrint('❌ Productos: ${response.error}');
+      }
+      if (response.notFoundIDs.isNotEmpty) {
+        debugPrint('⚠️ Productos no encontrados: ${response.notFoundIDs}');
+      }
+
+      // En Android puede llegar un ProductDetails por cada oferta: nos
+      // quedamos con el primero de cada ID (el plan base).
+      final byId = <String, ProductDetails>{};
+      for (final p in response.productDetails) {
+        byId.putIfAbsent(p.id, () => p);
+      }
+      products.value = [
+        if (byId[monthlyId] != null) byId[monthlyId]!,
+        if (byId[yearlyId] != null) byId[yearlyId]!,
+      ];
+    } catch (e) {
+      debugPrint('❌ loadProducts: $e');
+    } finally {
+      productsLoaded.value = true;
     }
-    products.value = [
-      if (byId[monthlyId] != null) byId[monthlyId]!,
-      if (byId[yearlyId] != null) byId[yearlyId]!,
-    ];
   }
 
   // ══════════════════════════════════════════════════════════════════════════

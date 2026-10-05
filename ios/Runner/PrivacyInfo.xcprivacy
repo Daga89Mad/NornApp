@@ -63,6 +63,20 @@
 			</array>
 		</dict>
 
+		<!-- ── Fotos que el usuario añade (perfil / entrenamientos) ── -->
+		<dict>
+			<key>NSPrivacyCollectedDataType</key>
+			<string>NSPrivacyCollectedDataTypePhotosorVideos</string>
+			<key>NSPrivacyCollectedDataTypeLinked</key>
+			<true/>
+			<key>NSPrivacyCollectedDataTypeTracking</key>
+			<false/>
+			<key>NSPrivacyCollectedDataTypePurposes</key>
+			<array>
+				<string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+			</array>
+		</dict>
+
 		<!-- ── Identificador de dispositivo: token push + IDFA de anuncios ── -->
 		<dict>
 			<key>NSPrivacyCollectedDataType</key>

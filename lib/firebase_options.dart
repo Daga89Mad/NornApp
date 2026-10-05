@@ -50,9 +50,14 @@ class DefaultFirebaseOptions {
     measurementId: 'G-3RPD6Y7ZGE',
   );
 
+  // CORREGIDO: igual que pasó en iOS, aquí seguía la app de Firebase del
+  // paquete antiguo (com.example.familycalendar). La app se publica como
+  // com.yeahsoft.nornapp, que en android/app/google-services.json es
+  // 1:469298655595:android:1872c4685eac6f36945c2e. El token FCM tiene que
+  // pertenecer a la app de Firebase cuyo paquete coincide con el instalado.
   static const FirebaseOptions android = FirebaseOptions(
     apiKey: 'AIzaSyBE7GvojLOdO-_DFQTrjbynFZzb9Rp8Hcs',
-    appId: '1:469298655595:android:ef14a7f3d80dfc1e945c2e',
+    appId: '1:469298655595:android:1872c4685eac6f36945c2e',
     messagingSenderId: '469298655595',
     projectId: 'familycalendar-a960a',
     storageBucket: 'familycalendar-a960a.firebasestorage.app',
