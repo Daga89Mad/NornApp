@@ -19,6 +19,7 @@ import 'package:flutter/foundation.dart';
 import '../models/friend_model.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
+import 'shared_date_override_service.dart';
 
 class WeeklyShareService {
   WeeklyShareService._();
@@ -453,10 +454,33 @@ class WeeklyShareService {
             switch (change.type) {
               case DocumentChangeType.added:
               case DocumentChangeType.modified:
+                final newDate =
+                    (data['date'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
+
+                // Si el DUEÑO cambia la fecha real, su fecha manda: mi
+                // override local queda obsoleto y, si no se limpia, la tarea
+                // se queda clavada en el día viejo (y se ve duplicada).
+                if (change.type == DocumentChangeType.modified) {
+                  final prev = await DBProvider.db.query(
+                    DBSchema.tableWeeklyTasks,
+                    columns: ['date'],
+                    where: 'id = ?',
+                    whereArgs: [change.doc.id],
+                    limit: '1',
+                  );
+                  final oldDate =
+                      prev.isEmpty ? null : prev.first['date'] as int?;
+                  if (oldDate != null && oldDate != newDate) {
+                    await SharedDateOverrideService.instance.clear(
+                      change.doc.id,
+                      'tasks',
+                    );
+                  }
+                }
+
                 await DBProvider.db.insertOrReplace(DBSchema.tableWeeklyTasks, {
                   'id': change.doc.id,
-                  'date':
-                      (data['date'] as Timestamp?)?.millisecondsSinceEpoch ?? 0,
+                  'date': newDate,
                   'title': data['title'] ?? '',
                   'description': data['description'] ?? '',
                   'is_done': (data['is_done'] ?? false) ? 1 : 0,
@@ -474,6 +498,9 @@ class WeeklyShareService {
                   DBSchema.tableWeeklyTasks,
                   where: 'id = ?',
                   whereArgs: [change.doc.id],
+                );
+                await SharedDateOverrideService.instance.clearAnyType(
+                  change.doc.id,
                 );
                 changed = true;
                 break;
