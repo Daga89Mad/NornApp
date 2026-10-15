@@ -77,11 +77,48 @@ class WeeklyTaskRepository {
         )
         .toList();
 
-    list.sort((a, b) {
+    final deduped = _collapseForeignDuplicates(list, overrides);
+
+    deduped.sort((a, b) {
       final c = a.date.compareTo(b.date);
       return c != 0 ? c : a.title.compareTo(b.title);
     });
-    return list;
+    return deduped;
+  }
+
+  /// Colapsa tareas compartidas por OTRA persona que se ven repetidas el mismo
+  /// día (mismo dueño, título y padre). Aparecen cuando el dueño mueve una
+  /// repetición de una serie a un día que ya tenía otra, o por un override
+  /// viejo. Las propias nunca se tocan.
+  /// Preferencia: la que no tiene override local y, a igualdad, la pendiente.
+  List<WeeklyTask> _collapseForeignDuplicates(
+    List<WeeklyTask> list,
+    Map<String, int> overrides,
+  ) {
+    final out = <WeeklyTask>[];
+    final chosen = <String, int>{};
+
+    int score(WeeklyTask t) =>
+        (overrides.containsKey(t.id) ? 0 : 2) + (t.isDone ? 0 : 1);
+
+    for (final t in list) {
+      final isForeign = t.ownerId.isNotEmpty && t.ownerId != _uid;
+      if (!isForeign) {
+        out.add(t);
+        continue;
+      }
+      final d = DateTime.fromMillisecondsSinceEpoch(t.date);
+      final key = '${t.ownerId}|${t.parentId}|'
+          '${t.title.trim().toLowerCase()}|${d.year}-${d.month}-${d.day}';
+      final idx = chosen[key];
+      if (idx == null) {
+        chosen[key] = out.length;
+        out.add(t);
+      } else if (score(t) > score(out[idx])) {
+        out[idx] = t;
+      }
+    }
+    return out;
   }
 
   /// Subtareas de una tarea concreta (con fecha local aplicada).

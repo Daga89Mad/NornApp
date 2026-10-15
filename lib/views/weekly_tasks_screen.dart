@@ -812,33 +812,42 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               ),
             ),
             actions: [
-              // Una tarea compartida conmigo NO se puede borrar: solo mover.
-              if (!isForeign)
-                TextButton(
-                  onPressed: () async {
-                    // NUEVO: si se repite, preguntar "solo este" o "toda la serie".
-                    final ids = await _repo.seriesIdsOf(task);
-                    if (!ctx.mounted) return;
-                    final scope = await askDeleteScopeIfSeries(
-                      ctx,
-                      title: task.title,
-                      count: ids.length,
-                      onlyLabel: 'Solo esta tarea',
+              // Propia → se borra de verdad (para todos).
+              // Compartida conmigo → se QUITA solo de mi semana; el dueño y
+              // el resto la siguen teniendo (DismissedSharedService).
+              TextButton(
+                onPressed: () async {
+                  final ids = await _repo.seriesIdsOf(task);
+                  if (!ctx.mounted) return;
+                  final scope = await askDeleteScopeIfSeries(
+                    ctx,
+                    title: task.title,
+                    count: ids.length,
+                    onlyLabel: 'Solo esta tarea',
+                  );
+                  if (scope == null) return;
+                  if (scope == DeleteScope.series) {
+                    await _repo.deleteSeries(task);
+                  } else {
+                    await _repo.delete(task.id);
+                  }
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  if (mounted && isForeign) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                          'Quitada de tu semana. Quien la comparte la sigue teniendo.',
+                        ),
+                      ),
                     );
-                    if (scope == null) return;
-                    if (scope == DeleteScope.series) {
-                      await _repo.deleteSeries(task);
-                    } else {
-                      await _repo.delete(task.id);
-                    }
-                    if (ctx.mounted) Navigator.pop(ctx);
-                    _loadWeek();
-                  },
-                  child: const Text(
-                    'Eliminar',
-                    style: TextStyle(color: Colors.redAccent),
-                  ),
+                  }
+                  _loadWeek();
+                },
+                child: Text(
+                  isForeign ? 'Quitar' : 'Eliminar',
+                  style: const TextStyle(color: Colors.redAccent),
                 ),
+              ),
               TextButton.icon(
                 icon: const Icon(Icons.event_repeat, size: 18),
                 label: const Text('Mover a…'),
