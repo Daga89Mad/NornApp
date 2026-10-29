@@ -1,5 +1,6 @@
 // lib/views/weekly_tasks_screen.dart
 
+import 'weekly_goals_bar.dart';
 import 'package:nornapp/views/share_weekly_dialog.dart';
 import 'package:flutter/material.dart';
 import '../models/weekly_task_model.dart';
@@ -1101,6 +1102,13 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       body: Column(
         children: [
           _buildTopBar(),
+          // Objetivos de la semana (sin día fijo, se pueden compartir).
+          WeeklyGoalsBar(
+            type: 'tasks',
+            weekStart: _currentWeekStart,
+            color: _primary,
+            hint: 'Escuchar un podcast',
+          ),
           _buildActionButtons(),
           if (_clipboard != null) _buildPasteBanner(),
           Expanded(
