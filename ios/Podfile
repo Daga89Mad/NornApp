@@ -2,9 +2,9 @@
 #
 # Se versiona en el repo (antes lo generaba Flutter con la plataforma
 # comentada) porque firebase_core 4.x usa el SDK de Firebase iOS 12, que
-# exige iOS 15 como mínimo. Con el Podfile por defecto `pod install` falla
+# exige iOS 15 como mínimo, y mobile_scanner 6 (MLKit) iOS 15.5. Con el Podfile por defecto `pod install` falla
 # en CI con "required a higher minimum deployment target".
-platform :ios, '15.0'
+platform :ios, '15.5'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -47,7 +47,7 @@ post_install do |installer|
     target.build_configurations.each do |config|
       # Todos los pods al mismo mínimo que la app: evita avisos y fallos de
       # pods que declaran iOS 9/11 y que Xcode 26 ya no compila.
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
     end
   end
 end
