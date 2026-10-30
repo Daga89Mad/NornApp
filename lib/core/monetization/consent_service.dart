@@ -31,29 +31,8 @@ class ConsentService {
     false,
   );
 
-  /// Resultado del último banner pedido ("Cargado" o el error de AdMob).
-  /// Solo para la pantalla de diagnóstico.
-  final ValueNotifier<String?> lastBannerResult = ValueNotifier<String?>(null);
-
-  /// Paso en el que está el arranque de anuncios (diagnóstico).
-  final ValueNotifier<String> startupStep = ValueNotifier<String>(
-    'Sin empezar',
-  );
-
   bool _started = false;
   bool _sdkInitialized = false;
-
-  /// Último error del consentimiento (diagnóstico).
-  String? lastConsentError;
-
-  /// Borra el consentimiento guardado y vuelve a empezar (para probar).
-  Future<void> resetConsentForTesting() async {
-    await ConsentInformation.instance.reset();
-    lastConsentError = null;
-    _started = false;
-    adsReady.value = false;
-    await gatherConsentAndInitAds();
-  }
 
   // ══════════════════════════════════════════════════════════════════════════
   // ARRANQUE
@@ -65,22 +44,15 @@ class ConsentService {
     _started = true;
 
     // 1. Consentimiento RGPD
-    startupStep.value = 'Pidiendo consentimiento (RGPD)';
     await _requestConsentUpdateAndShowFormIfRequired();
 
     // 2. ATT (solo iOS)
-    startupStep.value = 'Aviso de seguimiento (ATT)';
     await _requestTrackingAuthorizationIfNeeded();
 
     // 3. Estado + SDK
     await _refreshConsentState();
     if (await ConsentInformation.instance.canRequestAds()) {
-      startupStep.value = 'Inicializando AdMob';
       await _initializeSdk();
-      startupStep.value = 'Listo';
-    } else {
-      startupStep.value =
-          'Sin permiso para anuncios (consentimiento no dado o sin mensaje RGPD)';
     }
   }
 
@@ -106,8 +78,6 @@ class ConsentService {
         ConsentForm.loadAndShowConsentFormIfRequired((FormError? error) {
           if (error != null) {
             debugPrint('⚠️ UMP formulario: ${error.message}');
-            lastConsentError =
-                'UMP formulario: ${error.errorCode} ${error.message}';
           }
           done();
         });
@@ -115,7 +85,6 @@ class ConsentService {
       (FormError error) {
         // Sin conexión, etc. Puede haber consentimiento de una sesión previa.
         debugPrint('⚠️ UMP update: ${error.message}');
-        lastConsentError = 'UMP update: ${error.errorCode} ${error.message}';
         done();
       },
     );
