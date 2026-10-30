@@ -97,6 +97,7 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
             loaded.dispose();
             return;
           }
+          ConsentService.instance.lastBannerResult.value = 'Cargado';
           setState(() {
             _ad?.dispose();
             _ad = loaded as BannerAd;
@@ -107,6 +108,8 @@ class _BannerAdWidgetState extends State<BannerAdWidget> {
         },
         onAdFailedToLoad: (Ad failed, LoadAdError error) {
           debugPrint('⚠️ Banner no cargado: ${error.code} ${error.message}');
+          ConsentService.instance.lastBannerResult.value =
+              'Error ${error.code}: ${error.message}';
           failed.dispose();
           _loadingAd = null;
         },

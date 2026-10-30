@@ -15,6 +15,7 @@ import 'package:nornapp/core/monetization/consent_service.dart';
 import 'package:nornapp/core/monetization/premium_service.dart';
 import 'package:nornapp/views/loginBody.dart';
 import 'package:nornapp/views/premium/paywall_screen.dart';
+import 'package:nornapp/views/premium/ad_diagnostics_screen.dart';
 import 'package:nornapp/views/sync_screen.dart';
 
 class AccountSettingsScreen extends StatefulWidget {
@@ -204,6 +205,16 @@ class _AccountSettingsScreenState extends State<AccountSettingsScreen> {
                           : 'Quita los anuncios',
                     ),
                     onTap: _openPaywall,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.bug_report_outlined),
+                  title: const Text('Diagnóstico de anuncios'),
+                  subtitle: const Text('Por qué se ven o no los anuncios'),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const AdDiagnosticsScreen(),
+                    ),
                   ),
                 ),
                 const Divider(),
