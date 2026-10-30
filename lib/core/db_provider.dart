@@ -20,7 +20,7 @@ class DBProvider {
   DBProvider._privateConstructor();
   static final DBProvider db = DBProvider._privateConstructor();
   static const String _legacyDbName = 'family_calendar.db';
-  static const int _dbVersion = DBSchema.version; // 24
+  static const int _dbVersion = DBSchema.version; // 25
   Database? _database;
   String? _openedForUid;
 
@@ -125,6 +125,13 @@ class DBProvider {
         "ADD COLUMN parent_id TEXT NOT NULL DEFAULT ''",
       );
       debugPrint('🛠️ Columna parent_id añadida (red de seguridad)');
+    }
+    if (!names.contains('color')) {
+      await db.execute(
+        "ALTER TABLE ${DBSchema.tableWeeklyTasks} "
+        "ADD COLUMN color INTEGER NOT NULL DEFAULT 0",
+      );
+      debugPrint('🛠️ Columna color añadida (red de seguridad)');
     }
   }
 
@@ -414,6 +421,17 @@ class DBProvider {
             "TEXT NOT NULL DEFAULT ''",
           );
           debugPrint('Migración v24: image_data en weekly_trainings');
+          break;
+        // ── v25: color en weekly_tasks (marcar tareas en la lista) ──────────
+        // Idempotente: si la columna ya existe (red de seguridad), no hace nada.
+        case 25:
+          await _addColumnIfMissing(
+            db,
+            DBSchema.tableWeeklyTasks,
+            'color',
+            'INTEGER NOT NULL DEFAULT 0',
+          );
+          debugPrint('Migración v25: color en weekly_tasks');
           break;
       }
     }

@@ -344,6 +344,7 @@ class WeeklyShareService {
           'shared_with': _listToJson(data['shared_with']),
           'recurrence': data['recurrence'] ?? 'none',
           'parent_id': data['parent_id'] ?? '',
+          'color': (data['color'] as num?)?.toInt() ?? 0,
           'synced': 1,
         };
       }).toList();
@@ -489,6 +490,7 @@ class WeeklyShareService {
                   'shared_with': _listToJson(data['shared_with']),
                   'recurrence': data['recurrence'] ?? 'none',
                   'parent_id': data['parent_id'] ?? '',
+                  'color': (data['color'] as num?)?.toInt() ?? 0,
                   'synced': 1,
                 });
                 changed = true;
@@ -534,6 +536,7 @@ class WeeklyShareService {
                   'shared_with': _listToJson(data['shared_with']),
                   'recurrence': data['recurrence'] ?? 'none',
                   'parent_id': data['parent_id'] ?? '',
+                  'color': (data['color'] as num?)?.toInt() ?? 0,
                   'synced': 1,
                 });
                 changed = true;
