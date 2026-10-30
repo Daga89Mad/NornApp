@@ -1,5 +1,6 @@
 // lib/views/weekly_menu_screen.dart
 
+import 'weekly_goals_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/weekly_menu_model.dart';
@@ -964,6 +965,13 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
       body: Column(
         children: [
           _buildTopBar(),
+          // Objetivos de la semana (sin día fijo, se pueden compartir).
+          WeeklyGoalsBar(
+            type: 'menus',
+            weekStart: _currentWeekStart,
+            color: _primary,
+            hint: 'Perder 2 kilos',
+          ),
           _buildActionButtons(),
           if (_clipboard != null) _buildPasteBanner(),
           Expanded(

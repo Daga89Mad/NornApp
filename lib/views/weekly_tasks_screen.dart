@@ -1,5 +1,6 @@
 // lib/views/weekly_tasks_screen.dart
 
+import 'weekly_goals_bar.dart';
 import 'package:nornapp/views/share_weekly_dialog.dart';
 import 'package:flutter/material.dart';
 import '../models/weekly_task_model.dart';
@@ -458,53 +459,110 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     String scope = 'semana';
     DateTime selectedDay = _currentWeekStart;
 
+    // Tareas principales de la semana, en el orden en que se ven.
+    final weekTasks = _tasks.where((t) => t.parentId.isEmpty).toList();
+    final Set<String> selectedIds = {};
+
     await showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) => AlertDialog(
           title: const Text('Quitar tareas'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              RadioListTile<String>(
-                title: const Text('Quitar toda la semana'),
-                value: 'semana',
-                groupValue: scope,
-                onChanged: (v) => setS(() => scope = v!),
-              ),
-              RadioListTile<String>(
-                title: const Text('Quitar un día concreto'),
-                value: 'dia',
-                groupValue: scope,
-                onChanged: (v) => setS(() => scope = v!),
-              ),
-              if (scope == 'dia') ...[
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 6,
-                  children: List.generate(7, (i) {
-                    final day = addDays(_currentWeekStart, i);
-                    final dayName = _fmtMedium(day);
-                    final isSelected =
-                        DateTime(day.year, day.month, day.day) ==
-                        DateTime(
-                          selectedDay.year,
-                          selectedDay.month,
-                          selectedDay.day,
+          content: SizedBox(
+            width: double.maxFinite,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  RadioListTile<String>(
+                    title: const Text('Quitar toda la semana'),
+                    value: 'semana',
+                    groupValue: scope,
+                    onChanged: (v) => setS(() => scope = v!),
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('Quitar un día concreto'),
+                    value: 'dia',
+                    groupValue: scope,
+                    onChanged: (v) => setS(() => scope = v!),
+                  ),
+                  RadioListTile<String>(
+                    title: const Text('Quitar tareas concretas'),
+                    value: 'tareas',
+                    groupValue: scope,
+                    onChanged: (v) => setS(() => scope = v!),
+                  ),
+                  if (scope == 'dia') ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 6,
+                      children: List.generate(7, (i) {
+                        final day = addDays(_currentWeekStart, i);
+                        final dayName = _fmtMedium(day);
+                        final isSelected =
+                            DateTime(day.year, day.month, day.day) ==
+                            DateTime(
+                              selectedDay.year,
+                              selectedDay.month,
+                              selectedDay.day,
+                            );
+                        return ChoiceChip(
+                          label: Text(
+                            dayName,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          selected: isSelected,
+                          selectedColor: Colors.red.withOpacity(0.2),
+                          onSelected: (_) => setS(() => selectedDay = day),
                         );
-                    return ChoiceChip(
-                      label: Text(
-                        dayName,
-                        style: const TextStyle(fontSize: 12),
-                      ),
-                      selected: isSelected,
-                      selectedColor: Colors.red.withOpacity(0.2),
-                      onSelected: (_) => setS(() => selectedDay = day),
-                    );
-                  }),
-                ),
-              ],
-            ],
+                      }),
+                    ),
+                  ],
+                  if (scope == 'tareas') ...[
+                    const SizedBox(height: 8),
+                    if (weekTasks.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Text(
+                          'No hay tareas esta semana',
+                          style: TextStyle(color: Colors.grey),
+                        ),
+                      )
+                    else
+                      for (final t in weekTasks)
+                        CheckboxListTile(
+                          dense: true,
+                          contentPadding: EdgeInsets.zero,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          value: selectedIds.contains(t.id),
+                          onChanged: (v) => setS(() {
+                            if (v == true) {
+                              selectedIds.add(t.id);
+                            } else {
+                              selectedIds.remove(t.id);
+                            }
+                          }),
+                          title: Text(
+                            t.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          subtitle: Text(
+                            t.isSharedFromOther(_myUid)
+                                ? '${_fmtMedium(DateTime.fromMillisecondsSinceEpoch(t.date))} · '
+                                      'compartida por ${t.ownerName.isNotEmpty ? t.ownerName : "otra persona"}'
+                                : _fmtMedium(
+                                    DateTime.fromMillisecondsSinceEpoch(
+                                      t.date,
+                                    ),
+                                  ),
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                        ),
+                  ],
+                ],
+              ),
+            ),
           ),
           actions: [
             TextButton(
@@ -515,18 +573,28 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.redAccent,
               ),
-              onPressed: () async {
-                if (scope == 'semana') {
-                  await _repo.deleteWeek(_currentWeekStart);
-                } else {
-                  await _repo.deleteDay(selectedDay);
-                }
-                if (ctx.mounted) Navigator.pop(ctx);
-                _loadWeek();
-              },
-              child: const Text(
-                'Quitar',
-                style: TextStyle(color: Colors.white),
+              onPressed: (scope == 'tareas' && selectedIds.isEmpty)
+                  ? null
+                  : () async {
+                      if (scope == 'semana') {
+                        await _repo.deleteWeek(_currentWeekStart);
+                      } else if (scope == 'dia') {
+                        await _repo.deleteDay(selectedDay);
+                      } else {
+                        // Propias → se borran para todos.
+                        // Compartidas conmigo → solo se quitan de mi semana.
+                        for (final id in selectedIds) {
+                          await _repo.delete(id);
+                        }
+                      }
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      _loadWeek();
+                    },
+              child: Text(
+                scope == 'tareas' && selectedIds.isNotEmpty
+                    ? 'Quitar (${selectedIds.length})'
+                    : 'Quitar',
+                style: const TextStyle(color: Colors.white),
               ),
             ),
           ],
@@ -1034,6 +1102,13 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       body: Column(
         children: [
           _buildTopBar(),
+          // Objetivos de la semana (sin día fijo, se pueden compartir).
+          WeeklyGoalsBar(
+            type: 'tasks',
+            weekStart: _currentWeekStart,
+            color: _primary,
+            hint: 'Escuchar un podcast',
+          ),
           _buildActionButtons(),
           if (_clipboard != null) _buildPasteBanner(),
           Expanded(

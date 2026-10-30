@@ -1,8 +1,10 @@
-# ios/Podfile
+# Podfile de NornApp (iOS).
 #
-# Firebase Apple SDK 12 (firebase_core 4.x / cloud_firestore 6.x) exige iOS 15.
-# Con 13.0 'pod install' falla con "required a higher minimum deployment target".
-platform :ios, '15.0'
+# Se versiona en el repo (antes lo generaba Flutter con la plataforma
+# comentada) porque firebase_core 4.x usa el SDK de Firebase iOS 12, que
+# exige iOS 15 como mínimo, y mobile_scanner 6 (MLKit) iOS 15.5. Con el Podfile por defecto `pod install` falla
+# en CI con "required a higher minimum deployment target".
+platform :ios, '15.5'
 
 # CocoaPods analytics sends network stats synchronously affecting flutter build latency.
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
@@ -43,9 +45,9 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     target.build_configurations.each do |config|
-      # Todos los pods con el mismo mínimo que la app (evita avisos y errores
-      # de "deployment target" al archivar).
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.0'
+      # Todos los pods al mismo mínimo que la app: evita avisos y fallos de
+      # pods que declaran iOS 9/11 y que Xcode 26 ya no compila.
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
     end
   end
 end

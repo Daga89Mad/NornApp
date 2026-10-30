@@ -440,16 +440,20 @@ class DBProvider {
     await batch.commit(noResult: true);
   }
 
+  /// [columns]: columnas a devolver (por defecto, todas). Son nombres fijos
+  /// del código, nunca texto del usuario.
   Future<List<Map<String, dynamic>>> query(
     String table, {
+    List<String>? columns,
     String? where,
     List<dynamic>? whereArgs,
     String? orderBy,
     String? limit,
   }) async {
     final c = await database;
+    final cols = (columns == null || columns.isEmpty) ? '*' : columns.join(', ');
     return c.rawQuery(
-      'SELECT * FROM $table'
+      'SELECT $cols FROM $table'
       '${where != null ? ' WHERE $where' : ''}'
       '${orderBy != null ? ' ORDER BY $orderBy' : ''}'
       '${limit != null ? ' LIMIT $limit' : ''}',

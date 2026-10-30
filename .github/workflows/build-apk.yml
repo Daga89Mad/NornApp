@@ -1,0 +1,156 @@
+# Compila la APK release de NornApp en GitHub Actions (mismo sistema que WarZero).
+#
+# NornApp es un repo PÚBLICO, así que la APK se publica en este mismo repo
+# (no hace falta un repo aparte ni un token extra). Enlace fijo de descarga:
+#   https://github.com/Daga89Mad/NornApp/releases/download/apk-latest/nornapp-release.apk
+#
+# Cuándo se ejecuta:
+#   - En cada push a main.
+#   - A mano: pestaña Actions > "Build APK release" > Run workflow.
+#
+# Dónde queda la APK:
+#   - Release "apk-latest" de este repo (siempre la última compilación de main).
+#   - Artefacto adjunto a cada ejecución (pestaña Actions, se guarda 3 días).
+#
+# Firma (OBLIGATORIA en main). La APK se firma con la clave de release.
+# Secrets (Settings > Secrets and variables > Actions > Secrets):
+#   ANDROID_KEYSTORE_BASE64   -> el .jks codificado en base64 (base64 -w0 upload-keystore.jks)
+#   ANDROID_KEYSTORE_PASSWORD -> storePassword
+#   ANDROID_KEY_ALIAS         -> keyAlias
+#   ANDROID_KEY_PASSWORD      -> keyPassword
+#   Sin ellos el runner firma con una clave de debug que se genera NUEVA en cada
+#   ejecución: cada APK tendría una firma distinta y Android no permitiría
+#   actualizar encima de la instalada. Por eso en main el workflow falla si faltan.
+#   En ejecuciones manuales de otras ramas se permite debug (solo pruebas).
+#
+# Variable opcional (Settings > Secrets and variables > Actions > Variables):
+#   ANDROID_BUILD_NUMBER_OFFSET -> se suma a github.run_number para el
+#   versionCode. Úsala si ya instalaste/subiste builds con un número mayor.
+
+name: Build APK release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write # para publicar la release apk-latest en este repo
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Versión de Flutter
+        run: flutter --version
+
+      - name: Firma de release (si hay secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/upload-keystore.jks"
+            {
+              echo "storeFile=$RUNNER_TEMP/upload-keystore.jks"
+              echo "storePassword=$KEYSTORE_PASSWORD"
+              echo "keyAlias=$KEY_ALIAS"
+              echo "keyPassword=$KEY_PASSWORD"
+            } > android/key.properties
+            echo "Firmando con la clave de release."
+          elif [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            echo "::error title=Faltan los secrets de firma::Sin ANDROID_KEYSTORE_BASE64 cada APK sale firmada con una clave de debug distinta y no se puede actualizar encima de la anterior."
+            exit 1
+          else
+            echo "::warning::Sin secrets de firma: la APK se firma con la clave de debug (solo para pruebas, no actualiza encima de otras)."
+          fi
+
+      - name: Número de build
+        id: build
+        run: |
+          OFFSET="${{ vars.ANDROID_BUILD_NUMBER_OFFSET }}"
+          [ -z "$OFFSET" ] && OFFSET=0
+          echo "number=$(( ${{ github.run_number }} + OFFSET ))" >> "$GITHUB_OUTPUT"
+
+      - name: Dependencias
+        run: flutter pub get
+
+      - name: Compilar APK release
+        run: |
+          set -o pipefail
+          if ! flutter build apk --release --build-number=${{ steps.build.outputs.number }} 2>&1 | tee build.log; then
+            # Vuelca el motivo del fallo como anotación para verlo en el resumen
+            # de la ejecución sin tener que abrir el log completo.
+            RESUMEN=$(grep -n -i -E "error|what went wrong|exception|failed|caused by|^lib/" build.log | grep -v -i "warning" | head -60)
+            [ -z "$RESUMEN" ] && RESUMEN=$(tail -60 build.log)
+            RESUMEN="${RESUMEN//'%'/'%25'}"
+            RESUMEN="${RESUMEN//$'\n'/'%0A'}"
+            echo "::error title=Fallo al compilar la APK::${RESUMEN}"
+            exit 1
+          fi
+
+      - name: Preparar fichero
+        id: apk
+        run: |
+          VERSION=$(grep -m1 '^version:' pubspec.yaml | awk '{print $2}' | cut -d'+' -f1)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          NUMBER=${{ steps.build.outputs.number }}
+          cp build/app/outputs/flutter-apk/app-release.apk nornapp-release.apk
+          cp nornapp-release.apk "nornapp-${VERSION}-build${NUMBER}.apk"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "number=$NUMBER" >> "$GITHUB_OUTPUT"
+          echo "versioned=nornapp-${VERSION}-build${NUMBER}.apk" >> "$GITHUB_OUTPUT"
+
+      # Copia de comodidad (la descarga oficial es la release apk-latest).
+      # Retención corta para no llenar la cuota de Actions; si falla, se sigue.
+      - name: Subir artefacto
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ steps.apk.outputs.versioned }}
+          path: ${{ steps.apk.outputs.versioned }}
+          retention-days: 3
+
+      - name: Publicar en la release apk-latest
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          target_commitish: ${{ github.sha }}
+          name: NornApp APK (última versión)
+          prerelease: true
+          make_latest: false
+          body: |
+            APK release de NornApp compilada automáticamente.
+
+            - Versión: ${{ steps.apk.outputs.version }} (build ${{ steps.apk.outputs.number }})
+            - Commit: ${{ steps.apk.outputs.sha }}
+
+            Descarga directa: `nornapp-release.apk`.
+          files: nornapp-release.apk
+          overwrite_files: true

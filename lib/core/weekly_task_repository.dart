@@ -308,7 +308,14 @@ class WeeklyTaskRepository {
   }
 
   /// Borra una tarea y, si es principal, también sus subtareas.
-  /// Si la tarea es compartida por otro, solo se OCULTA (no se toca Firebase).
+  ///
+  /// · Tarea PROPIA     → se borra de verdad (local + Firebase).
+  /// · Tarea COMPARTIDA → solo se OCULTA de mi semana (no se toca Firebase).
+  ///
+  /// BUG CORREGIDO: getTasksForWeek colapsa las copias ajenas repetidas el
+  /// mismo día y enseña solo una. Antes se ocultaba únicamente esa, así que al
+  /// recargar aparecía la gemela y parecía que "no se dejaba borrar". Ahora se
+  /// ocultan también todas sus gemelas.
   Future<void> delete(String id) async {
     final rows = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
@@ -321,23 +328,20 @@ class WeeklyTaskRepository {
         : (rows.first['owner_id'] as String? ?? '');
     final bool isShared = ownerId.isNotEmpty && ownerId != _uid;
 
-    // Subtareas asociadas
+    if (isShared) {
+      final ids = <String>{id, ...await _foreignTwinIds(rows.first)};
+      for (final tid in ids) {
+        await _hideForeign(tid);
+      }
+      return;
+    }
+
+    // ── Tarea propia: borrado real, con sus subtareas ────────────────────────
     final subs = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
       where: 'parent_id = ?',
       whereArgs: [id],
     );
-
-    if (isShared) {
-      await DismissedSharedService.instance.dismiss(id, 'tasks');
-      for (final s in subs) {
-        await DismissedSharedService.instance.dismiss(
-          s['id'] as String,
-          'tasks',
-        );
-      }
-    }
-
     for (final s in subs) {
       final sid = s['id'] as String;
       await DBProvider.db.delete(
@@ -345,14 +349,69 @@ class WeeklyTaskRepository {
         where: 'id = ?',
         whereArgs: [sid],
       );
-      if (!isShared) _deleteFromFirebase(sid);
+      _deleteFromFirebase(sid);
     }
     await DBProvider.db.delete(
       DBSchema.tableWeeklyTasks,
       where: 'id = ?',
       whereArgs: [id],
     );
-    if (!isShared) _deleteFromFirebase(id);
+    _deleteFromFirebase(id);
+  }
+
+  /// Oculta en este móvil una tarea compartida por otra persona (y sus
+  /// subtareas). No toca Firebase: el dueño y el resto la siguen teniendo.
+  /// La marca en dismissed_shared evita que el listener la vuelva a enseñar.
+  Future<void> _hideForeign(String id) async {
+    if (id.isEmpty) return;
+    final subs = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      columns: ['id'],
+      where: 'parent_id = ?',
+      whereArgs: [id],
+    );
+    final ids = <String>[id, for (final s in subs) s['id'] as String];
+    await DismissedSharedService.instance.dismissAll(ids, 'tasks');
+    for (final tid in ids) {
+      await DBProvider.db.delete(
+        DBSchema.tableWeeklyTasks,
+        where: 'id = ?',
+        whereArgs: [tid],
+      );
+    }
+  }
+
+  /// Copias ajenas que getTasksForWeek colapsa con [row] (mismo dueño, padre,
+  /// título y día efectivo, override local incluido). No incluye a [row].
+  Future<Set<String>> _foreignTwinIds(Map<String, dynamic> row) async {
+    final id = row['id'] as String? ?? '';
+    final ownerId = row['owner_id'] as String? ?? '';
+    final parentId = row['parent_id'] as String? ?? '';
+    final title = (row['title'] as String? ?? '').trim().toLowerCase();
+    if (ownerId.isEmpty) return {};
+
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'tasks',
+    );
+    int effDate(Map<String, dynamic> r) =>
+        overrides[r['id'] as String] ?? (r['date'] as int? ?? 0);
+    String dayKey(int ms) {
+      final d = DateTime.fromMillisecondsSinceEpoch(ms);
+      return '${d.year}-${d.month}-${d.day}';
+    }
+
+    final day = dayKey(effDate(row));
+    final candidates = await DBProvider.db.query(
+      DBSchema.tableWeeklyTasks,
+      where: 'owner_id = ? AND parent_id = ? AND id != ?',
+      whereArgs: [ownerId, parentId, id],
+    );
+    return {
+      for (final r in candidates)
+        if ((r['title'] as String? ?? '').trim().toLowerCase() == title &&
+            dayKey(effDate(r)) == day)
+          r['id'] as String,
+    };
   }
 
   Future<void> deleteWeek(DateTime weekStart) async {
@@ -395,24 +454,29 @@ class WeeklyTaskRepository {
   }
 
   /// Oculta (no borra) las tareas compartidas por otros dentro del rango.
+  ///
+  /// BUG CORREGIDO: antes se filtraba por la fecha real del dueño. Si yo había
+  /// movido una tarea compartida (override local), "Quitar día/semana" no la
+  /// quitaba del día donde yo la veía y, en cambio, sí quitaba la que había
+  /// sacado de ese día. Ahora se usa la fecha que se ve en pantalla.
   Future<void> _dismissSharedInRange(int fromMs, int toMs) async {
+    final overrides = await SharedDateOverrideService.instance.mapForType(
+      'tasks',
+    );
     final shared = await DBProvider.db.query(
       DBSchema.tableWeeklyTasks,
-      where: 'date >= ? AND date <= ? AND owner_id != ? AND owner_id != ?',
-      whereArgs: [fromMs, toMs, _uid, ''],
+      where: 'owner_id != ? AND owner_id != ?',
+      whereArgs: [_uid, ''],
     );
-    final ids = shared
-        .map((r) => r['id'] as String)
-        .where((id) => id.isNotEmpty)
-        .toList();
-    if (ids.isEmpty) return;
-    await DismissedSharedService.instance.dismissAll(ids, 'tasks');
+    final ids = <String>{};
+    for (final r in shared) {
+      final id = r['id'] as String? ?? '';
+      if (id.isEmpty) continue;
+      final d = overrides[id] ?? (r['date'] as int? ?? 0);
+      if (d >= fromMs && d <= toMs) ids.add(id);
+    }
     for (final id in ids) {
-      await DBProvider.db.delete(
-        DBSchema.tableWeeklyTasks,
-        where: 'id = ?',
-        whereArgs: [id],
-      );
+      await _hideForeign(id);
     }
   }
 
