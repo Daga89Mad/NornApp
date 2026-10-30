@@ -12,6 +12,7 @@ class WeeklyTask {
   final int synced;
   final String recurrence; // 'none' | 'daily' | 'weekly'
   final String parentId; // '' = tarea principal; si no, id de la tarea padre
+  final int color; // color ARGB para marcar la tarea en la lista; 0 = sin color
 
   const WeeklyTask({
     required this.id,
@@ -25,6 +26,7 @@ class WeeklyTask {
     this.synced = 0,
     this.recurrence = 'none',
     this.parentId = '',
+    this.color = 0,
   });
 
   factory WeeklyTask.fromMap(Map<String, dynamic> m) => WeeklyTask(
@@ -39,6 +41,7 @@ class WeeklyTask {
     synced: (m['synced'] as int?) ?? 0,
     recurrence: (m['recurrence'] as String?) ?? 'none',
     parentId: (m['parent_id'] as String?) ?? '',
+    color: (m['color'] as int?) ?? 0,
   );
 
   Map<String, dynamic> toMap() => {
@@ -53,6 +56,7 @@ class WeeklyTask {
     'synced': synced,
     'recurrence': recurrence,
     'parent_id': parentId,
+    'color': color,
   };
 
   WeeklyTask copyWith({
@@ -67,6 +71,7 @@ class WeeklyTask {
     int? synced,
     String? recurrence,
     String? parentId,
+    int? color,
   }) => WeeklyTask(
     id: id ?? this.id,
     date: date ?? this.date,
@@ -79,6 +84,7 @@ class WeeklyTask {
     synced: synced ?? this.synced,
     recurrence: recurrence ?? this.recurrence,
     parentId: parentId ?? this.parentId,
+    color: color ?? this.color,
   );
 
   bool isSharedFromOther(String myUid) =>

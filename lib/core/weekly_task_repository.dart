@@ -506,6 +506,7 @@ class WeeklyTaskRepository {
           'shared_with': _listToJson(data['shared_with']),
           'recurrence': data['recurrence'] ?? 'none',
           'parent_id': data['parent_id'] ?? '',
+          'color': (data['color'] as num?)?.toInt() ?? 0,
           'synced': 1,
         };
       }).toList();
@@ -530,6 +531,7 @@ class WeeklyTaskRepository {
         'shared_with': sharedUids,
         'recurrence': task.recurrence,
         'parent_id': task.parentId,
+        'color': task.color,
         'updated_at': FieldValue.serverTimestamp(),
       };
       await _firestore

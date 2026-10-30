@@ -19,6 +19,8 @@ class SettingsRepository {
   static const _kCalBgName = 'cal_bg_name';
   static const _kCalDesign = 'cal_design';
 
+  static const _kWeeklyDesign = 'weekly_design'; // ← 'Clásico' | 'Moderno'
+
   // ── Menu ─────────────────────────────────────────────────────────────────
 
   Future<int> getMenuStyleIndex() async {
@@ -39,6 +41,26 @@ class SettingsRepository {
   Future<void> savePaletteIndex(int index) async {
     final p = await SharedPreferences.getInstance();
     await p.setInt(_kPaletteIndex, index);
+  }
+
+  // ── Diseño de las pantallas weekly ───────────────────────────────────────
+  // Una sola preferencia para todas las pantallas weekly (tareas, menú,
+  // entrenamiento): 'Clásico' (por defecto) o 'Moderno'.
+
+  static const String weeklyDesignClassic = 'Clásico';
+  static const String weeklyDesignModern = 'Moderno';
+
+  Future<bool> getWeeklyModern() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getString(_kWeeklyDesign) == weeklyDesignModern;
+  }
+
+  Future<void> saveWeeklyModern(bool modern) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _kWeeklyDesign,
+      modern ? weeklyDesignModern : weeklyDesignClassic,
+    );
   }
 
   // ── Calendar ─────────────────────────────────────────────────────────────

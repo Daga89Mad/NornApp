@@ -1,6 +1,6 @@
 // lib/core/db_schema.dart
 class DBSchema {
-  static const int version = 24; // ← v24: image_data en weekly_trainings
+  static const int version = 25; // ← v25: color en weekly_tasks
 
   static const String tableUsers = 'users';
   static const String tableEvents = 'events';
@@ -136,6 +136,7 @@ class DBSchema {
       shared_with TEXT NOT NULL DEFAULT '',
       recurrence TEXT NOT NULL DEFAULT 'none',
       parent_id TEXT NOT NULL DEFAULT '',      -- ← subtareas
+      color INTEGER NOT NULL DEFAULT 0,        -- ← color ARGB; 0 = sin color
       synced INTEGER NOT NULL DEFAULT 0
     )
   """;

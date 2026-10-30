@@ -16,6 +16,7 @@ import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
 import 'delete_series_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../core/settings_repository.dart';
 
 // ── Helpers de fecha en español sin dependencia de locale ────────────────────
 const _diasSemana = [
@@ -44,6 +45,19 @@ const _meses = [
 ];
 const _diasCortos = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
+// ── Paleta de colores para marcar tareas en la lista ─────────────────────────
+// Se guarda el valor ARGB en la tarea; 0 = sin color.
+const List<Color> kTaskColors = [
+  Color(0xFFE53935), // rojo
+  Color(0xFFFB8C00), // naranja
+  Color(0xFFFDD835), // amarillo
+  Color(0xFF43A047), // verde
+  Color(0xFF1E88E5), // azul
+  Color(0xFF8E24AA), // morado
+  Color(0xFFD81B60), // rosa
+  Color(0xFF795548), // marrón
+];
+
 String _fmtShort(DateTime d) => '${d.day} ${_meses[d.month]}';
 String _fmtMedium(DateTime d) => '${_diasCortos[d.weekday - 1]} ${d.day}';
 String _fmtWeekRange(DateTime monday) {
@@ -66,6 +80,9 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   bool _isLoading = true;
   String _myUid = '';
 
+  // Diseño: false = clásico, true = moderno (se guarda en SettingsRepository).
+  bool _modern = false;
+
   // Portapapeles para copiar/pegar semanas
   List<WeeklyTask>? _clipboard;
   DateTime? _clipboardSourceMonday;
@@ -78,6 +95,9 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     super.initState();
     _myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
     _currentWeekStart = _mondayOf(DateTime.now());
+    SettingsRepository.instance.getWeeklyModern().then((m) {
+      if (mounted && m != _modern) setState(() => _modern = m);
+    });
     _loadWeek();
     WeeklyShareService.instance.startListening(
       onChanged: () {
@@ -320,6 +340,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     RecurrenceRule rule = RecurrenceRule.none;
+    int selectedColor = 0;
     bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -377,6 +398,16 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                     textCapitalization: TextCapitalization.sentences,
                   ),
                   const SizedBox(height: 12),
+                  const Text(
+                    'Color (opcional)',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  TaskColorPicker(
+                    selected: selectedColor,
+                    onChanged: (v) => setS(() => selectedColor = v),
+                  ),
+                  const SizedBox(height: 12),
                   // Cada día / semana / 2 semanas / mes / X días + desde-hasta
                   RecurrencePicker(
                     startDate: selectedDay,
@@ -411,6 +442,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                         description: descCtrl.text.trim(),
                         ownerId: '',
                         recurrence: rule.encode(),
+                        color: selectedColor,
                       );
                       final created = await _repo.saveWithRecurrence(
                         task,
@@ -610,6 +642,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     final subCtrl = TextEditingController();
     final bool isForeign = task.isSharedFromOther(_myUid);
     final bool isParent = task.parentId.isEmpty;
+    int selectedColor = task.color;
 
     final friends = await FriendRepository.instance.getAll();
     Set<String> sharedUids = WeeklyShareService.parseUids(task.sharedWith);
@@ -695,6 +728,30 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                       minLines: 6,
                       maxLines: 12,
                     ),
+
+                    // ── Color de la tarea (marca en la lista) ─────────────────
+                    if (!isForeign) ...[
+                      const SizedBox(height: 16),
+                      const Divider(),
+                      Row(
+                        children: const [
+                          Icon(Icons.palette_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text(
+                            'Color',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      TaskColorPicker(
+                        selected: selectedColor,
+                        onChanged: (v) => setS(() => selectedColor = v),
+                      ),
+                    ],
 
                     // ── Subtareas (solo para tareas principales) ──────────────
                     if (isParent) ...[
@@ -935,6 +992,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                       task.copyWith(
                         title: title,
                         description: descCtrl.text.trim(),
+                        color: selectedColor,
                         synced: 0,
                       ),
                     );
@@ -1071,15 +1129,48 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   // BUILD
   // ══════════════════════════════════════════════════════════════════════════
 
+  void _setDesign(bool modern) {
+    setState(() => _modern = modern);
+    SettingsRepository.instance.saveWeeklyModern(modern);
+  }
+
+  /// Selector de diseño (Clásico / Moderno) para la barra superior.
+  Widget _buildDesignMenu() {
+    Widget item(String label, bool value) => Row(
+      children: [
+        Expanded(child: Text(label)),
+        if (_modern == value) Icon(Icons.check, size: 18, color: _primary),
+      ],
+    );
+    return PopupMenuButton<bool>(
+      tooltip: 'Diseño',
+      icon: const Icon(Icons.palette_outlined),
+      onSelected: _setDesign,
+      itemBuilder: (_) => [
+        PopupMenuItem<bool>(value: false, child: item('Clásico', false)),
+        PopupMenuItem<bool>(value: true, child: item('Moderno', true)),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: _modern
+          ? const Color(0xFFF2F4F7)
+          : const Color(0xFFF5F5F5),
       appBar: AppBar(
-        backgroundColor: _primary,
-        foregroundColor: Colors.white,
+        backgroundColor: _modern ? Colors.white : _primary,
+        foregroundColor: _modern ? const Color(0xFF1B2733) : Colors.white,
         elevation: 0,
-        title: const Text('Tareas Semanales'),
+        scrolledUnderElevation: 0,
+        centerTitle: _modern ? false : null, // clásico: el de la plataforma
+        title: Text(
+          'Tareas Semanales',
+          style: _modern
+              ? const TextStyle(fontWeight: FontWeight.w800, fontSize: 22)
+              : null,
+        ),
         actions: [
           // Chapa con las propuestas de cambio de día pendientes.
           PendingDateChangesButton(
@@ -1087,6 +1178,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
             accent: _primary,
             onResolved: _loadWeek,
           ),
+          _buildDesignMenu(),
           IconButton(
             tooltip: 'Compartir',
             icon: const Icon(Icons.people_outline),
@@ -1121,6 +1213,8 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: _primary,
         foregroundColor: Colors.white,
+        elevation: _modern ? 2 : null,
+        shape: _modern ? const StadiumBorder() : null,
         onPressed: () => _showCreateDialog(),
         icon: const Icon(Icons.add_task),
         label: const Text('Añadir tarea'),
@@ -1128,7 +1222,108 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     );
   }
 
+  /// Selector de semana moderno: píldora blanca con flechas redondas.
+  Widget _buildTopBarModern() {
+    Widget arrow(IconData icon, VoidCallback onTap, String tooltip) =>
+        IconButton(
+          icon: Icon(icon, color: _primary),
+          onPressed: onTap,
+          tooltip: tooltip,
+          style: IconButton.styleFrom(
+            backgroundColor: _primary.withOpacity(0.10),
+          ),
+        );
+
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
+      child: Row(
+        children: [
+          arrow(Icons.chevron_left, _prevWeek, 'Semana anterior'),
+          Expanded(
+            child: Column(
+              children: [
+                Text(
+                  _weekLabel(),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFF1B2733),
+                    fontWeight: FontWeight.w800,
+                    fontSize: 17,
+                  ),
+                ),
+                if (_isCurrentWeek())
+                  Container(
+                    margin: const EdgeInsets.only(top: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _primary.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      'Semana actual',
+                      style: TextStyle(
+                        color: _primary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          arrow(Icons.chevron_right, _nextWeek, 'Semana siguiente'),
+        ],
+      ),
+    );
+  }
+
+  /// Botones de acción modernos: tres píldoras sin barra de fondo.
+  Widget _buildActionButtonsModern() {
+    final bool copying = _clipboard != null;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: _ActionBtn(
+              icon: Icons.add_task,
+              label: 'Crear',
+              color: _primary,
+              modern: true,
+              onTap: () => _showCreateDialog(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _ActionBtn(
+              icon: copying ? Icons.content_paste : Icons.copy_all,
+              label: copying ? 'Pegar aquí' : 'Copiar',
+              color: Colors.blueGrey,
+              modern: true,
+              onTap: copying ? _pasteIntoCurrentWeek : _copyCurrentWeek,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _ActionBtn(
+              icon: Icons.delete_outline,
+              label: 'Quitar',
+              color: Colors.redAccent,
+              modern: true,
+              onTap: _showRemoveDialog,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildTopBar() {
+    if (_modern) return _buildTopBarModern();
     return Container(
       color: _primary,
       padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
@@ -1181,6 +1376,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   }
 
   Widget _buildActionButtons() {
+    if (_modern) return _buildActionButtonsModern();
     final bool copying = _clipboard != null;
     return Container(
       color: _accent.withOpacity(0.12),
@@ -1262,6 +1458,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
             done: totalDone,
             total: totalAll,
             color: _primary,
+            modern: _modern,
           );
         }
         final day = addDays(_currentWeekStart, index - 1);
@@ -1272,6 +1469,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
           tasks: dayTasks,
           isToday: isToday,
           primaryColor: _primary,
+          modern: _modern,
           myUid: _myUid,
           onAddTap: () => _showCreateDialog(preselectedDay: day),
           onToggle: (t) async {
@@ -1306,16 +1504,53 @@ class _ActionBtn extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final bool modern;
 
   const _ActionBtn({
     required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
+    this.modern = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    if (modern) {
+      // Píldora blanca con borde suave y icono + texto en línea.
+      return Material(
+        color: Colors.white,
+        shape: StadiumBorder(
+          side: BorderSide(color: color.withOpacity(0.25)),
+        ),
+        child: InkWell(
+          customBorder: const StadiumBorder(),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(icon, color: color, size: 18),
+                const SizedBox(width: 6),
+                Flexible(
+                  child: Text(
+                    label,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     return Material(
       color: color.withOpacity(0.1),
       borderRadius: BorderRadius.circular(10),
@@ -1349,17 +1584,85 @@ class _WeekSummary extends StatelessWidget {
   final int done;
   final int total;
   final Color color;
+  final bool modern;
 
   const _WeekSummary({
     required this.done,
     required this.total,
     required this.color,
+    this.modern = false,
   });
 
   @override
   Widget build(BuildContext context) {
     if (total == 0) return const SizedBox.shrink();
     final pct = total == 0 ? 0.0 : done / total;
+    if (modern) {
+      // Tarjeta con degradado y cifra grande.
+      return Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [color, color.withOpacity(0.72)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(22),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  '$done',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 34,
+                    fontWeight: FontWeight.w800,
+                    height: 1,
+                  ),
+                ),
+                Text(
+                  ' / $total',
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  '${(pct * 100).round()}%',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'tareas completadas esta semana',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 8,
+                backgroundColor: Colors.white24,
+                valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -1401,11 +1704,85 @@ class _WeekSummary extends StatelessWidget {
   }
 }
 
+/// Fila de circulitos para elegir el color de una tarea.
+/// [selected] es el valor ARGB actual (0 = sin color). Devuelve por [onChanged]
+/// el nuevo valor (0 si se pulsa la opción "sin color").
+class TaskColorPicker extends StatelessWidget {
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  const TaskColorPicker({
+    Key? key,
+    required this.selected,
+    required this.onChanged,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    Widget dot({
+      required Color color,
+      required bool isSelected,
+      required VoidCallback onTap,
+      bool isNone = false,
+    }) {
+      return InkWell(
+        onTap: onTap,
+        customBorder: const CircleBorder(),
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isNone ? Colors.transparent : color,
+            border: Border.all(
+              color: isSelected ? Colors.black87 : Colors.grey.shade300,
+              width: isSelected ? 2.5 : 1,
+            ),
+          ),
+          child: isNone
+              ? Icon(Icons.block, size: 18, color: Colors.grey.shade400)
+              : isSelected
+                  ? Icon(
+                      Icons.check,
+                      size: 18,
+                      // En colores claros (amarillo…) el check blanco no se ve.
+                      color: color.computeLuminance() > 0.5
+                          ? Colors.black87
+                          : Colors.white,
+                    )
+                  : null,
+        ),
+      );
+    }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        // Opción "sin color"
+        dot(
+          color: Colors.transparent,
+          isNone: true,
+          isSelected: selected == 0,
+          onTap: () => onChanged(0),
+        ),
+        for (final c in kTaskColors)
+          dot(
+            color: c,
+            isSelected: selected == c.value,
+            onTap: () => onChanged(c.value),
+          ),
+      ],
+    );
+  }
+}
+
 class _TaskDayCard extends StatelessWidget {
   final DateTime day;
   final List<WeeklyTask> tasks;
   final bool isToday;
   final Color primaryColor;
+  final bool modern;
   final String myUid;
   final VoidCallback onAddTap;
   final void Function(WeeklyTask) onToggle;
@@ -1416,6 +1793,7 @@ class _TaskDayCard extends StatelessWidget {
     required this.tasks,
     required this.isToday,
     required this.primaryColor,
+    this.modern = false,
     this.myUid = '',
     required this.onAddTap,
     required this.onToggle,
@@ -1437,6 +1815,10 @@ class _TaskDayCard extends StatelessWidget {
     final doneCount = parents.where((t) => t.isDone).length;
     final totalCount = parents.length;
     final headerColor = isToday ? primaryColor : Colors.grey.shade700;
+
+    if (modern) {
+      return _buildModern(parents, subsByParent, doneCount, totalCount);
+    }
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -1558,6 +1940,277 @@ class _TaskDayCard extends StatelessWidget {
     );
   }
 
+  // ── Diseño moderno ────────────────────────────────────────────────────────
+
+  Widget _buildModern(
+    List<WeeklyTask> parents,
+    Map<String, List<WeeklyTask>> subsByParent,
+    int doneCount,
+    int totalCount,
+  ) {
+    final dayName = _diasSemana[day.weekday - 1];
+    final parentIds = parents.map((p) => p.id).toSet();
+    final orphans = <WeeklyTask>[
+      for (final entry in subsByParent.entries)
+        if (!parentIds.contains(entry.key)) ...entry.value,
+    ];
+    final allDone = totalCount > 0 && doneCount == totalCount;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          color: isToday
+              ? primaryColor.withOpacity(0.55)
+              : Colors.grey.shade200,
+          width: isToday ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Cabecera: círculo con el número del día + nombre + contador.
+          Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 6, 6),
+            child: Row(
+              children: [
+                Container(
+                  width: 42,
+                  height: 42,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isToday
+                        ? primaryColor
+                        : primaryColor.withOpacity(0.10),
+                    shape: BoxShape.circle,
+                  ),
+                  child: Text(
+                    '${day.day}',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                      color: isToday ? Colors.white : primaryColor,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        dayName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 15,
+                          color: Color(0xFF1B2733),
+                        ),
+                      ),
+                      Text(
+                        isToday ? 'Hoy · ${_fmtShort(day)}' : _fmtShort(day),
+                        style: TextStyle(
+                          color: Colors.grey.shade600,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (totalCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: allDone
+                          ? Colors.green.withOpacity(0.14)
+                          : primaryColor.withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '$doneCount/$totalCount',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: allDone ? Colors.green.shade700 : primaryColor,
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  icon: Icon(Icons.add_circle_outline, color: primaryColor),
+                  onPressed: onAddTap,
+                  tooltip: 'Añadir tarea',
+                  visualDensity: VisualDensity.compact,
+                ),
+              ],
+            ),
+          ),
+          if (parents.isEmpty && orphans.isEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 2, 16, 14),
+              child: Text(
+                'Sin tareas para este día',
+                style: TextStyle(color: Colors.grey.shade400, fontSize: 13),
+              ),
+            )
+          else
+            Padding(
+              padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+              child: Column(
+                children: [
+                  for (final t in parents) ...[
+                    _modernTile(t, subs: subsByParent[t.id] ?? const []),
+                    for (final s in (subsByParent[t.id] ?? const []))
+                      _modernTile(s, isSub: true),
+                  ],
+                  for (final o in orphans) _modernTile(o),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Fila de tarea moderna: casilla redondeada, título, descripción y, si la
+  /// tarea tiene color, una barrita redondeada a la izquierda (sin tintar toda
+  /// la fila).
+  Widget _modernTile(
+    WeeklyTask t, {
+    bool isSub = false,
+    List<WeeklyTask> subs = const [],
+  }) {
+    final shared = t.isSharedFromOther(myUid);
+    final subDone = subs.where((s) => s.isDone).length;
+    final Color? taskColor = t.color != 0 ? Color(t.color) : null;
+    final double box = isSub ? 20 : 24;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: () => isSub ? onToggle(t) : onEditTap(t),
+      child: Container(
+        margin: EdgeInsets.only(left: isSub ? 28 : 0, top: 2, bottom: 2),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        decoration: BoxDecoration(
+          color: taskColor?.withOpacity(t.isDone ? 0.05 : 0.10),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (taskColor != null)
+              Container(
+                width: 4,
+                height: isSub ? 22 : 34,
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: taskColor,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            GestureDetector(
+              onTap: () => onToggle(t),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: box,
+                height: box,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  color: t.isDone ? primaryColor : Colors.transparent,
+                  border: Border.all(
+                    color: t.isDone ? primaryColor : Colors.grey.shade400,
+                    width: 2,
+                  ),
+                ),
+                child: t.isDone
+                    ? const Icon(Icons.check, size: 15, color: Colors.white)
+                    : null,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          t.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontWeight: isSub
+                                ? FontWeight.w500
+                                : FontWeight.w700,
+                            fontSize: isSub ? 13 : 14.5,
+                            decoration: t.isDone
+                                ? TextDecoration.lineThrough
+                                : null,
+                            color: t.isDone
+                                ? Colors.grey
+                                : const Color(0xFF1B2733),
+                          ),
+                        ),
+                      ),
+                      if (shared && !isSub)
+                        Padding(
+                          padding: const EdgeInsets.only(left: 6),
+                          child: Icon(
+                            Icons.people_alt,
+                            size: 15,
+                            color: Colors.teal.shade400,
+                          ),
+                        ),
+                      if (!isSub && subs.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.only(left: 6),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 7,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: primaryColor.withOpacity(0.10),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            '$subDone/${subs.length}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              color: primaryColor,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (!isSub && t.description.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 2),
+                      child: Text(
+                        t.description,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: t.isDone
+                              ? Colors.grey.shade400
+                              : Colors.grey.shade600,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _taskTile(
     WeeklyTask t, {
     bool isSub = false,
@@ -1565,8 +2218,10 @@ class _TaskDayCard extends StatelessWidget {
   }) {
     final shared = t.isSharedFromOther(myUid);
     final subDone = subs.where((s) => s.isDone).length;
+    // Color elegido por el usuario para marcar la tarea en la lista.
+    final Color? taskColor = t.color != 0 ? Color(t.color) : null;
 
-    return ListTile(
+    final tile = ListTile(
       dense: isSub,
       isThreeLine: !isSub && t.description.isNotEmpty,
       contentPadding: EdgeInsets.only(left: isSub ? 44 : 12, right: 12),
@@ -1678,6 +2333,17 @@ class _TaskDayCard extends StatelessWidget {
               padding: EdgeInsets.zero,
             ),
       onTap: () => isSub ? onToggle(t) : onEditTap(t),
+    );
+
+    // Sin color → tile normal. Con color → franja lateral + fondo suave,
+    // para que la tarea quede marcada en la lista de un vistazo.
+    if (taskColor == null) return tile;
+    return Container(
+      decoration: BoxDecoration(
+        color: taskColor.withOpacity(t.isDone ? 0.04 : 0.07),
+        border: Border(left: BorderSide(color: taskColor, width: 4)),
+      ),
+      child: tile,
     );
   }
 }
