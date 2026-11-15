@@ -15,6 +15,7 @@ import 'date_change_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'share_with_picker.dart';
 import 'delete_series_dialog.dart';
 import '../core/week_dates.dart';
 
@@ -310,6 +311,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     String mealType = WeeklyMenuEntry.mealTypes.first;
     RecurrenceRule rule = RecurrenceRule.none;
+    Set<String> shareUids = {};
     bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -389,6 +391,13 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                     accent: _accent,
                     onChanged: (r) => rule = r,
                   ),
+                  // Por defecto, quienes tienen el reparto global; se puede
+                  // cambiar solo para este item.
+                  ShareWithPicker(
+                    type: 'menus',
+                    accent: _accent,
+                    onChanged: (u) => shareUids = u,
+                  ),
                 ],
               ),
             ),
@@ -417,10 +426,12 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                         title: title,
                         description: descCtrl.text.trim(),
                         ownerId: '',
+                        sharedWith: WeeklyShareService.uidsToJson(shareUids),
                       );
                       final created = await _repo.saveWithRecurrence(
                         entry,
                         rule,
+                        useGlobalShares: false, // reparto elegido en el diálogo
                       );
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (!mounted) return;

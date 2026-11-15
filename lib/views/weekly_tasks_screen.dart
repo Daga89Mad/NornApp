@@ -14,6 +14,7 @@ import 'week_day_picker.dart';
 import '../core/week_dates.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'share_with_picker.dart';
 import 'delete_series_dialog.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../core/settings_repository.dart';
@@ -340,6 +341,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
   Future<void> _showCreateDialog({DateTime? preselectedDay}) async {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     RecurrenceRule rule = RecurrenceRule.none;
+    Set<String> shareUids = {};
     int selectedColor = 0;
     bool saving = false;
     final titleCtrl = TextEditingController();
@@ -414,6 +416,13 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                     accent: _accent,
                     onChanged: (r) => rule = r,
                   ),
+                  // Por defecto, quienes tienen el reparto global; se puede
+                  // cambiar solo para este item.
+                  ShareWithPicker(
+                    type: 'tasks',
+                    accent: _accent,
+                    onChanged: (u) => shareUids = u,
+                  ),
                 ],
               ),
             ),
@@ -441,12 +450,14 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                         title: title,
                         description: descCtrl.text.trim(),
                         ownerId: '',
+                        sharedWith: WeeklyShareService.uidsToJson(shareUids),
                         recurrence: rule.encode(),
                         color: selectedColor,
                       );
                       final created = await _repo.saveWithRecurrence(
                         task,
                         rule,
+                        false, // ya trae el reparto elegido en el diálogo
                       );
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (!mounted) return;

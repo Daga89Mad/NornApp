@@ -178,7 +178,7 @@ class WeeklyTaskRepository {
   ///  · Tarea EXISTENTE → se respeta el shared_with actual de la BD local
   ///    (compartidos y descompartidos individuales incluidos). El reparto
   ///    global ya se aplicó al crearla o lo aplica shareWithFriends().
-  Future<void> save(WeeklyTask task) async {
+  Future<void> save(WeeklyTask task, {bool useGlobalShares = true}) async {
     final bool isMine = task.ownerId.isEmpty || task.ownerId == _uid;
     final String? stored = await _storedSharedWith(task.id);
 
@@ -203,7 +203,9 @@ class WeeklyTaskRepository {
       uids = WeeklyShareService.parseUids(stored);
     } else {
       uids = WeeklyShareService.parseUids(task.sharedWith);
-      try {
+      // Si el usuario ha elegido a mano con quién compartir al crear,
+      // no se suma el reparto global.
+      if (useGlobalShares) try {
         uids.addAll(
           await WeeklyShareService.instance.getSharedUidsForType('tasks'),
         );
@@ -586,10 +588,11 @@ class WeeklyTaskRepository {
   Future<int> saveWithRecurrence(
     WeeklyTask task, [
     RecurrenceRule? rule,
+    bool useGlobalShares = true,
   ]) async {
     final r = rule ?? RecurrenceRule.decode(task.recurrence);
     final base = task.copyWith(recurrence: r.encode());
-    await save(base);
+    await save(base, useGlobalShares: useGlobalShares);
     if (r.isNone) return 1;
 
     final dates = r
@@ -611,6 +614,7 @@ class WeeklyTaskRepository {
               isDone: false,
               synced: 0,
             ),
+            useGlobalShares: useGlobalShares,
           ),
       ]);
     }

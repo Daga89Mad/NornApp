@@ -80,6 +80,7 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
       builder: (_) => AddEventDialog(
         initialEvent: _event,
         initialChecklistItems: existingItemTexts,
+        date: widget.date,
       ),
     );
     if (result == null || !mounted) return;
@@ -108,9 +109,10 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
     );
 
     try {
+      // El diálogo permite cambiar el día del evento.
       final saved = await EventRepository.instance.save(
         updatedEvent,
-        widget.date,
+        (result['date'] as DateTime?) ?? widget.date,
       );
 
       if (saved.id != null) {
