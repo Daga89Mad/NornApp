@@ -13,6 +13,7 @@ import '../core/week_dates.dart';
 import '../core/weekly_share_service.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
+import 'share_with_picker.dart';
 import 'delete_series_dialog.dart';
 import 'image_helpers.dart';
 
@@ -302,6 +303,7 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     String trainingType = WeeklyTrainingEntry.trainingTypes.first;
     RecurrenceRule rule = RecurrenceRule.none;
+    Set<String> shareUids = {};
     String imageData = '';
     bool saving = false;
     final titleCtrl = TextEditingController();
@@ -390,6 +392,13 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                     accent: _accent,
                     onChanged: (r) => rule = r,
                   ),
+                  // Por defecto, quienes tienen el reparto global; se puede
+                  // cambiar solo para este item.
+                  ShareWithPicker(
+                    type: 'trainings',
+                    accent: _accent,
+                    onChanged: (u) => shareUids = u,
+                  ),
                 ],
               ),
             ),
@@ -419,11 +428,13 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                         description: descCtrl.text.trim(),
                         isDone: false,
                         ownerId: '',
+                        sharedWith: WeeklyShareService.uidsToJson(shareUids),
                         imageData: imageData,
                       );
                       final created = await _repo.saveWithRecurrence(
                         entry,
                         rule,
+                        useGlobalShares: false, // reparto elegido en el diálogo
                       );
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (!mounted) return;

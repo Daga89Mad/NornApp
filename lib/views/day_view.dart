@@ -188,6 +188,7 @@ class _DayViewState extends State<DayView> {
       builder: (_) => AddEventDialog(
         initialEvent: ev,
         initialChecklistItems: existingItems,
+        date: widget.date,
       ),
     );
     if (result == null) return;
@@ -237,8 +238,17 @@ class _DayViewState extends State<DayView> {
       soloParaMi: (result['soloParaMi'] as bool?) ?? false,
     );
     // ... (deja el resto del método igual: guardado, checklist, return)
+    // Día elegido en el diálogo (puede ser distinto al de esta vista).
+    final pickedDate = (result['date'] as DateTime?) ?? widget.date;
+    final targetDate = DateTime(
+      pickedDate.year,
+      pickedDate.month,
+      pickedDate.day,
+    );
+    final movedOut = daysBetween(widget.date, targetDate) != 0;
+
     try {
-      final saved = await EventRepository.instance.save(newEvent, widget.date);
+      final saved = await EventRepository.instance.save(newEvent, targetDate);
 
       if (saved.id != null && tipo == Tipo.Checklist) {
         final items = (result['checklistItems'] as List<String>?) ?? [];
@@ -249,8 +259,24 @@ class _DayViewState extends State<DayView> {
         await ChecklistRepository.instance.deleteAllForEvent(saved.id!);
       }
 
-      if (existingEvent == null && mounted) {
-        setState(() => _events.add(saved));
+      if (mounted) {
+        if (existingEvent == null && !movedOut) {
+          setState(() => _events.add(saved));
+        } else if (existingEvent != null && movedOut) {
+          // Se ha movido a otro día: desaparece de esta vista.
+          setState(() => _events.removeWhere((e) => e.id == saved.id));
+        }
+      }
+      if (movedOut && mounted) {
+        final d = targetDate;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Evento guardado el ${d.day.toString().padLeft(2, '0')}/'
+              '${d.month.toString().padLeft(2, '0')}/${d.year}',
+            ),
+          ),
+        );
       }
 
       // ── Repeticiones (solo al crear) ────────────────────────────────────
@@ -259,9 +285,16 @@ class _DayViewState extends State<DayView> {
         final items = tipo == Tipo.Checklist
             ? ((result['checklistItems'] as List<String>?) ?? const <String>[])
             : const <String>[];
-        await _createRecurringCopies(newEvent, saved.id!, rule, items);
+        await _createRecurringCopies(
+          newEvent,
+          saved.id!,
+          rule,
+          items,
+          targetDate,
+        );
       }
-      return saved;
+      // Si se ha movido de día, no se reemplaza en la lista de este día.
+      return movedOut ? null : saved;
     } catch (e) {
       debugPrint('Error guardando evento: $e');
       if (mounted) {
@@ -284,8 +317,9 @@ class _DayViewState extends State<DayView> {
     String rootId,
     RecurrenceRule rule,
     List<String> checklistItems,
+    DateTime startDate,
   ) async {
-    final dates = rule.occurrences(widget.date).skip(1).toList();
+    final dates = rule.occurrences(startDate).skip(1).toList();
     if (dates.isEmpty) return;
 
     final messenger = ScaffoldMessenger.of(context);
@@ -307,7 +341,7 @@ class _DayViewState extends State<DayView> {
           ); // aritmética de calendario: no se mueve con el cambio de hora
 
     Future<void> saveOne(DateTime d, int index) async {
-      final offset = daysBetween(widget.date, d);
+      final offset = daysBetween(startDate, d);
       final copy = base.copyWith(
         id: SeriesId.copyId(rootId, index),
         alarmAt: shift(base.alarmAt, offset),
@@ -1005,6 +1039,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
 
   late String _category;
   late Tipo _tipo;
+  late DateTime _date;
   late TimeOfDay _start;
   late TimeOfDay _end;
   late List<String> _checklistItems;
@@ -1063,6 +1098,8 @@ class _AddEventDialogState extends State<AddEventDialog> {
   void initState() {
     super.initState();
     _loadCategories(); // carga asíncrona; los built-in ya están disponibles
+    final d = widget.date ?? DateTime.now();
+    _date = DateTime(d.year, d.month, d.day);
     final ev = widget.initialEvent;
     if (ev != null) {
       _titleController.text = ev.title;
@@ -1159,6 +1196,38 @@ class _AddEventDialogState extends State<AddEventDialog> {
         }
       });
     }
+  }
+
+  /// Cambia el día del evento. La alarma y la notificación se desplazan los
+  /// mismos días para que sigan siendo relativas al evento.
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(_date.year - 5),
+      lastDate: DateTime(_date.year + 10),
+    );
+    if (picked == null || !mounted) return;
+    final newDate = DateTime(picked.year, picked.month, picked.day);
+    final offset = daysBetween(_date, newDate);
+    if (offset == 0) return;
+    DateTime? shift(DateTime? dt) => dt == null
+        ? null
+        : DateTime(dt.year, dt.month, dt.day + offset, dt.hour, dt.minute);
+    setState(() {
+      _date = newDate;
+      _alarmDateTime = shift(_alarmDateTime);
+      _notifDateTime = shift(_notifDateTime);
+      // El selector de repetición se reinicia con la nueva fecha.
+      _recurrence = RecurrenceRule.none;
+    });
+  }
+
+  String _fmtDate(DateTime d) {
+    const dias = ['lun', 'mar', 'mié', 'jue', 'vie', 'sáb', 'dom'];
+    return '${dias[d.weekday - 1]} '
+        '${d.day.toString().padLeft(2, '0')}/'
+        '${d.month.toString().padLeft(2, '0')}/${d.year}';
   }
 
   /// Abre un DatePicker + TimePicker encadenados y devuelve el DateTime.
@@ -1358,6 +1427,19 @@ class _AddEventDialogState extends State<AddEventDialog> {
               ),
               const SizedBox(height: 8),
 
+              // Día
+              InkWell(
+                onTap: _pickDate,
+                child: InputDecorator(
+                  decoration: const InputDecoration(
+                    labelText: 'Día',
+                    suffixIcon: Icon(Icons.calendar_today, size: 18),
+                  ),
+                  child: Text(_fmtDate(_date)),
+                ),
+              ),
+              const SizedBox(height: 8),
+
               // Horas
               Row(
                 children: [
@@ -1459,10 +1541,11 @@ class _AddEventDialogState extends State<AddEventDialog> {
 
               // Repetir: cada día / semana / 2 semanas / mes / X días
               // (solo al crear; al editar se modifica solo este evento).
-              if (!_isEditing && widget.date != null) ...[
+              if (!_isEditing) ...[
                 const Divider(height: 24),
                 RecurrencePicker(
-                  startDate: widget.date!,
+                  key: ValueKey(_date),
+                  startDate: _date,
                   accent: Theme.of(context).colorScheme.primary,
                   onChanged: (r) => setState(() => _recurrence = r),
                 ),
@@ -1528,6 +1611,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
               'categoryColor': cat.color.value,
               'categoryIcon': cat.icon,
               'tipo': _tipo,
+              'date': _date,
               'start': _start,
               'end': _end,
               'description': _descController.text.trim(),

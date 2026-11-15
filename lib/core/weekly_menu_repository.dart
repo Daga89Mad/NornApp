@@ -169,7 +169,7 @@ class WeeklyMenuRepository {
   /// BUG CORREGIDO (igual que en tareas): en un menú EXISTENTE se respeta el
   /// shared_with actual de la BD local y no se vuelve a sumar el reparto
   /// global. Solo los menús NUEVOS heredan el reparto global.
-  Future<void> save(WeeklyMenuEntry entry) async {
+  Future<void> save(WeeklyMenuEntry entry, {bool useGlobalShares = true}) async {
     final bool isMine = entry.ownerId.isEmpty || entry.ownerId == _uid;
     final String? stored = await _storedSharedWith(entry.id);
 
@@ -194,7 +194,9 @@ class WeeklyMenuRepository {
       uids = WeeklyShareService.parseUids(stored);
     } else {
       uids = WeeklyShareService.parseUids(entry.sharedWith);
-      try {
+      // Si el usuario ha elegido a mano con quién compartir al crear,
+      // no se suma el reparto global.
+      if (useGlobalShares) try {
         uids.addAll(
           await WeeklyShareService.instance.getSharedUidsForType('menus'),
         );
@@ -224,9 +226,10 @@ class WeeklyMenuRepository {
   /// Devuelve cuántos se han creado en total.
   Future<int> saveWithRecurrence(
     WeeklyMenuEntry entry,
-    RecurrenceRule rule,
-  ) async {
-    await save(entry);
+    RecurrenceRule rule, {
+    bool useGlobalShares = true,
+  }) async {
+    await save(entry, useGlobalShares: useGlobalShares);
     if (rule.isNone) return 1;
 
     final dates = rule
@@ -248,6 +251,7 @@ class WeeklyMenuRepository {
               date: dates[j].millisecondsSinceEpoch,
               synced: 0,
             ),
+            useGlobalShares: useGlobalShares,
           ),
       ]);
     }
