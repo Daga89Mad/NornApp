@@ -28,6 +28,8 @@
 //     programar las alarmas locales tras restaurar.
 
 import 'dart:async';
+import 'dart:convert';
+import 'event_repository.dart';
 import 'package:flutter/foundation.dart' show VoidCallback, debugPrint;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -238,6 +240,13 @@ class FirebaseSyncService {
           'has_notification': (data['has_notification'] ?? false) ? 1 : 0,
           'notification_at': _msFromTs(data['notification_at']),
           'solo_para_mi': isPrivate || (data['solo_para_mi'] ?? false) ? 1 : 0,
+          // Reparto elegido a mano: solo lo guarda el dueño.
+          'shared_with':
+              !isPrivate &&
+                  data['share_custom'] == true &&
+                  data['owner_id'] == uid
+              ? jsonEncode(List<String>.from(data['shared_with'] ?? const []))
+              : null,
         });
 
         // Extraer checklist embebido en el doc del evento
@@ -511,6 +520,7 @@ class FirebaseSyncService {
       uid: uid,
       eventId: event.id!,
       soloParaMi: event.soloParaMi,
+      customShare: event.sharedWith,
       // La categoría para decidir con quién se comparte sigue siendo la misma
       // que antes (no cambia el comportamiento de compartir).
       shareCategory: event.category.name,
@@ -555,6 +565,7 @@ class FirebaseSyncService {
       uid: uid,
       eventId: id,
       soloParaMi: row['solo_para_mi'] == 1,
+      customShare: EventRepository.parseSharedWith(row['shared_with']),
       shareCategory: _enumCategoryName(rawCategory),
       fields: {
         'title': row['title'] ?? '',
@@ -603,6 +614,7 @@ class FirebaseSyncService {
     required bool soloParaMi,
     required String shareCategory,
     required Map<String, dynamic> fields,
+    List<String>? customShare,
   }) async {
     try {
       final ref = _db.collection('events').doc(eventId);
@@ -644,11 +656,15 @@ class FirebaseSyncService {
         if (existsShared) await ref.delete();
         debugPrint('🔒 Evento privado respaldado: $eventId');
       } else {
-        final sharedWithUids = await _getSharedWithUids(uid, shareCategory);
+        // Elegido a mano en el evento → exactamente esas personas.
+        // Si no, el reparto global por categoría (como antes).
+        final sharedWithUids =
+            customShare ?? await _getSharedWithUids(uid, shareCategory);
         await ref.set({
           ...fields,
           'owner_id': uid,
           'shared_with': sharedWithUids,
+          'share_custom': customShare != null,
           'solo_para_mi': false,
           'updated_at': FieldValue.serverTimestamp(),
         }, SetOptions(merge: true));
@@ -1062,6 +1078,14 @@ class FirebaseSyncService {
   void stopListening() {
     for (final sub in _subscriptions) sub.cancel();
     _subscriptions.clear();
+  }
+
+  /// UIDs con los que se comparte por defecto una categoría del calendario
+  /// (reparto global). Lo usa el diálogo para preseleccionar "Compartir con".
+  Future<List<String>> calendarShareUidsFor(String categoryName) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return [];
+    return _getSharedWithUids(uid, categoryName);
   }
 
   Future<List<String>> _getSharedWithUids(

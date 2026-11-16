@@ -106,6 +106,8 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
       hasNotification: (result['hasNotif'] as bool?) ?? _event.hasNotification,
       notificationAt: result['notifAt'] as DateTime? ?? _event.notificationAt,
       soloParaMi: (result['soloParaMi'] as bool?) ?? _event.soloParaMi,
+      ownerId: _event.ownerId,
+      sharedWith: (result['sharedWith'] as List<String>?) ?? _event.sharedWith,
     );
 
     try {

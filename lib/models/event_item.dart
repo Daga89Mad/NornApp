@@ -38,6 +38,9 @@ class EventItem {
   // ownerId: UID de Firebase del propietario.
   // null = evento propio (creado antes de este campo).
   final String? ownerId;
+  // Con quién se comparte ESTE evento (UIDs), elegido a mano en el diálogo.
+  // null = no se ha elegido: se usa el reparto global por categoría.
+  final List<String>? sharedWith;
   const EventItem({
     this.id,
     required this.category,
@@ -57,6 +60,7 @@ class EventItem {
     this.notificationAt,
     this.soloParaMi = false,
     this.ownerId,
+    this.sharedWith,
   });
   String get effectiveCategoryKey =>
       categoryKey ?? category.name; // ← 3) el getter
@@ -79,6 +83,7 @@ class EventItem {
     DateTime? notificationAt,
     bool? soloParaMi,
     String? ownerId,
+    List<String>? sharedWith,
   }) => EventItem(
     id: id ?? this.id,
     category: category ?? this.category,
@@ -98,5 +103,6 @@ class EventItem {
     notificationAt: notificationAt ?? this.notificationAt,
     soloParaMi: soloParaMi ?? this.soloParaMi,
     ownerId: ownerId ?? this.ownerId,
+    sharedWith: sharedWith ?? this.sharedWith,
   );
 }

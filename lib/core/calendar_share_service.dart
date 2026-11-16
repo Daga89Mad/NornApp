@@ -57,6 +57,8 @@ class CalendarShareService {
 
     for (final doc in eventsSnap.docs) {
       final data = doc.data();
+      // Eventos con "Compartir con" elegido a mano: no se tocan.
+      if (data['share_custom'] == true) continue;
       final category = (data['category'] as String? ?? '').toLowerCase();
       final matches = categories.any(
         (c) => c.toLowerCase() == category || _categoryMatches(c, category),

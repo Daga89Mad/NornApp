@@ -34,7 +34,8 @@ class DBSchema {
       color INTEGER NOT NULL DEFAULT 4280391411, owner_id TEXT,
       synced INTEGER NOT NULL DEFAULT 0, has_alarm INTEGER NOT NULL DEFAULT 0,
       alarm_at INTEGER, has_notification INTEGER NOT NULL DEFAULT 0,
-      notification_at INTEGER, solo_para_mi INTEGER NOT NULL DEFAULT 0
+      notification_at INTEGER, solo_para_mi INTEGER NOT NULL DEFAULT 0,
+      shared_with TEXT
     )
   """;
 
