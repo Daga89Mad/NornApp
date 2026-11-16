@@ -57,10 +57,13 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Flutter (stable)
+      # Versión fijada: la 3.48+ exige Gradle 9.3.1 y el proyecto usa 8.14.3.
+      # Para subirla, actualizar antes Gradle/AGP en android/.
+      - name: Flutter (3.47.9)
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          flutter-version: 3.47.9
           cache: true
 
       - name: Versión de Flutter
