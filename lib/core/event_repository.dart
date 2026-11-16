@@ -1,5 +1,6 @@
 // lib/core/event_repository.dart
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -46,6 +47,7 @@ class EventRepository {
       'has_notification': e.hasNotification ? 1 : 0,
       'notification_at': e.notificationAt?.millisecondsSinceEpoch,
       'solo_para_mi': e.soloParaMi ? 1 : 0,
+      'shared_with': e.sharedWith == null ? null : jsonEncode(e.sharedWith),
     };
   }
 
@@ -100,7 +102,18 @@ class EventRepository {
           : null,
       soloParaMi: ((m['solo_para_mi'] as int?) ?? 0) == 1,
       ownerId: m['owner_id'] as String?,
+      sharedWith: parseSharedWith(m['shared_with']),
     );
+  }
+
+  /// Lee la columna shared_with (JSON). null si no se eligió a mano.
+  static List<String>? parseSharedWith(Object? raw) {
+    if (raw is! String || raw.isEmpty) return null;
+    try {
+      return List<String>.from(jsonDecode(raw) as List);
+    } catch (_) {
+      return null;
+    }
   }
 
   // ── Queries ────────────────────────────────────────────────────────────────

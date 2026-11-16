@@ -20,6 +20,8 @@ import '../core/series_id.dart';
 import '../core/week_dates.dart';
 import 'recurrence_picker.dart';
 import 'delete_series_dialog.dart';
+import 'share_with_picker.dart';
+import '../core/firebase_sync_service.dart';
 
 class DayView extends StatefulWidget {
   final DateTime date;
@@ -236,6 +238,10 @@ class _DayViewState extends State<DayView> {
       hasNotification: (result['hasNotif'] as bool?) ?? false,
       notificationAt: result['notifAt'] as DateTime?,
       soloParaMi: (result['soloParaMi'] as bool?) ?? false,
+      ownerId: existingEvent?.ownerId,
+      // Elegido en "Compartir con"; si no se tocó, se mantiene el que tenía.
+      sharedWith:
+          (result['sharedWith'] as List<String>?) ?? existingEvent?.sharedWith,
     );
     // ... (deja el resto del método igual: guardado, checklist, return)
     // Día elegido en el diálogo (puede ser distinto al de esta vista).
@@ -929,13 +935,15 @@ class _DayViewState extends State<DayView> {
                                 }),
                               ),
                             ),
+                            // Turnos compartidos de amigos: se pintan DEBAJO
+                            // de los eventos y no capturan toques, para que
+                            // no tapen ni bloqueen los eventos propios.
+                            ..._sharedShifts.map(
+                              (s) => _buildSharedShiftCard(s),
+                            ),
                             ..._events.asMap().entries.map(
                               (entry) =>
                                   _buildEventCard(entry.key, entry.value),
-                            ),
-                            // Turnos compartidos de amigos en el timeline
-                            ..._sharedShifts.map(
-                              (s) => _buildSharedShiftCard(s),
                             ),
                           ],
                         ),
@@ -970,7 +978,8 @@ class _DayViewState extends State<DayView> {
       left: leftColumnWidth + 4,
       right: 4,
       height: height - 8,
-      child: Container(
+      child: IgnorePointer(
+        child: Container(
         decoration: BoxDecoration(
           color: c.withOpacity(0.12),
           borderRadius: BorderRadius.circular(8),
@@ -1003,6 +1012,7 @@ class _DayViewState extends State<DayView> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -1050,6 +1060,32 @@ class _AddEventDialogState extends State<AddEventDialog> {
   bool _hasNotification = false;
   DateTime? _notifDateTime;
   bool _soloParaMi = false;
+
+  /// UIDs elegidos en "Compartir con". null = el usuario no lo ha tocado.
+  Set<String>? _shareUids;
+
+  /// Solo el dueño puede elegir con quién se comparte.
+  bool get _canChooseShare {
+    final owner = widget.initialEvent?.ownerId;
+    final me = FirebaseAuth.instance.currentUser?.uid;
+    return owner == null || owner.isEmpty || owner == me;
+  }
+
+  /// Preselección: el reparto del propio evento o, si no tiene, el global
+  /// de su categoría (lo que se usaría si no se elige nada).
+  Future<Set<String>> _loadInitialShare() async {
+    final explicit = widget.initialEvent?.sharedWith;
+    if (explicit != null) return explicit.toSet();
+    final enumName = Category.values
+        .firstWhere(
+          (c) => c.name == _category,
+          orElse: () => Category.Evento,
+        )
+        .name;
+    return (await FirebaseSyncService.instance.calendarShareUidsFor(
+      enumName,
+    )).toSet();
+  }
 
   // ── Repetición (solo al crear) ────────────────────────────────────────────
   RecurrenceRule _recurrence = RecurrenceRule.none;
@@ -1335,6 +1371,21 @@ class _AddEventDialogState extends State<AddEventDialog> {
           color: Colors.grey.shade700,
           onChanged: (v) => setState(() => _soloParaMi = v),
         ),
+
+        // ── Compartir con (como en tareas) ───────────────────────────────────
+        if (!_soloParaMi && _canChooseShare)
+          ShareWithPicker(
+            // Con evento sin reparto propio, la preselección sale de la
+            // categoría: se recarga al cambiarla.
+            key: ValueKey(
+              widget.initialEvent?.sharedWith != null ? 'own' : _category,
+            ),
+            type: 'calendar',
+            accent: Theme.of(context).colorScheme.primary,
+            loadInitial: _loadInitialShare,
+            notifyInitial: false,
+            onChanged: (u) => _shareUids = u,
+          ),
       ],
     );
   }
@@ -1393,6 +1444,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
                     setState(() {
                       _category = v;
                       _tipo = _tiposForKey(v).first;
+                      if (widget.initialEvent?.sharedWith == null) {
+                        _shareUids = null;
+                      }
                     });
                   }
                 },
@@ -1621,6 +1675,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
               'hasNotif': _hasNotification,
               'notifAt': _notifDateTime,
               'soloParaMi': _soloParaMi,
+              'sharedWith': _shareUids?.toList(),
               'recurrence': _isEditing ? RecurrenceRule.none : _recurrence,
             });
           },

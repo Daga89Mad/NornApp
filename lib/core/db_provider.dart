@@ -88,6 +88,8 @@ class DBProvider {
     await _ensureFunContentSchema(db); // ← red de seguridad idempotente
     await _ensureDismissedSharedTable(db); // ← red de seguridad idempotente
     await _ensureDateChangeTables(db); // ← red de seguridad idempotente
+    // Compartir por evento: UIDs elegidos a mano (JSON). NULL = reparto global.
+    await _addColumnIfMissing(db, DBSchema.tableEvents, 'shared_with', 'TEXT');
     return db;
   }
 

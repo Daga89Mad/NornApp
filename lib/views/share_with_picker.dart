@@ -20,11 +20,22 @@ class ShareWithPicker extends StatefulWidget {
   final Color accent;
   final ValueChanged<Set<String>> onChanged;
 
+  /// Opcional: de dónde sale la preselección. Si es null se usa el reparto
+  /// global de [type] (weekly_shares). El calendario lo usa para preseleccionar
+  /// el reparto del evento o el de su categoría.
+  final Future<Set<String>> Function()? loadInitial;
+
+  /// Si es false, [onChanged] solo se llama cuando el usuario toca un chip
+  /// (no al cargar la preselección).
+  final bool notifyInitial;
+
   const ShareWithPicker({
     Key? key,
     required this.type,
     required this.accent,
     required this.onChanged,
+    this.loadInitial,
+    this.notifyInitial = true,
   }) : super(key: key);
 
   @override
@@ -51,9 +62,11 @@ class _ShareWithPickerState extends State<ShareWithPicker> {
           .toList();
     } catch (_) {}
     try {
-      global = (await WeeklyShareService.instance.getSharedUidsForType(
-        widget.type,
-      )).toSet();
+      global = widget.loadInitial != null
+          ? await widget.loadInitial!()
+          : (await WeeklyShareService.instance.getSharedUidsForType(
+              widget.type,
+            )).toSet();
     } catch (_) {}
     if (!mounted) return;
     final validUids = friends.map((f) => f.firebaseUid!).toSet();
@@ -64,7 +77,7 @@ class _ShareWithPickerState extends State<ShareWithPicker> {
         ..addAll(global.where(validUids.contains));
       _loading = false;
     });
-    widget.onChanged(Set<String>.from(_selected));
+    if (widget.notifyInitial) widget.onChanged(Set<String>.from(_selected));
   }
 
   void _toggle(String uid) {
