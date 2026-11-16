@@ -929,13 +929,15 @@ class _DayViewState extends State<DayView> {
                                 }),
                               ),
                             ),
+                            // Turnos compartidos de amigos: se pintan DEBAJO
+                            // de los eventos y no capturan toques, para que
+                            // no tapen ni bloqueen los eventos propios.
+                            ..._sharedShifts.map(
+                              (s) => _buildSharedShiftCard(s),
+                            ),
                             ..._events.asMap().entries.map(
                               (entry) =>
                                   _buildEventCard(entry.key, entry.value),
-                            ),
-                            // Turnos compartidos de amigos en el timeline
-                            ..._sharedShifts.map(
-                              (s) => _buildSharedShiftCard(s),
                             ),
                           ],
                         ),
@@ -970,7 +972,8 @@ class _DayViewState extends State<DayView> {
       left: leftColumnWidth + 4,
       right: 4,
       height: height - 8,
-      child: Container(
+      child: IgnorePointer(
+        child: Container(
         decoration: BoxDecoration(
           color: c.withOpacity(0.12),
           borderRadius: BorderRadius.circular(8),
@@ -1003,6 +1006,7 @@ class _DayViewState extends State<DayView> {
               ),
             ),
           ],
+        ),
         ),
       ),
     );
