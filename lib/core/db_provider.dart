@@ -90,6 +90,13 @@ class DBProvider {
     await _ensureDateChangeTables(db); // ← red de seguridad idempotente
     // Compartir por evento: UIDs elegidos a mano (JSON). NULL = reparto global.
     await _addColumnIfMissing(db, DBSchema.tableEvents, 'shared_with', 'TEXT');
+    // Aviso push al guardar (1 = avisar a los destinatarios). Por defecto no.
+    await _addColumnIfMissing(
+      db,
+      DBSchema.tableEvents,
+      'send_push',
+      'INTEGER NOT NULL DEFAULT 0',
+    );
     return db;
   }
 

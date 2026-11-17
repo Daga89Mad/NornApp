@@ -313,6 +313,7 @@ class _DayViewState extends State<DayView> {
       // Elegido en "Compartir con"; si no se tocó, se mantiene el que tenía.
       sharedWith:
           (result['sharedWith'] as List<String>?) ?? existingEvent?.sharedWith,
+      sendPush: (result['sendPush'] as bool?) ?? false,
     );
     // ... (deja el resto del método igual: guardado, checklist, return)
     // Día elegido en el diálogo (puede ser distinto al de esta vista).
@@ -1202,6 +1203,10 @@ class _AddEventDialogState extends State<AddEventDialog> {
   DateTime? _notifDateTime;
   bool _soloParaMi = false;
 
+  /// Avisar con push a las personas con las que se comparte. Por defecto no,
+  /// y no se hereda al editar: se decide en cada guardado.
+  bool _sendPush = false;
+
   /// UIDs elegidos en "Compartir con". null = el usuario no lo ha tocado.
   Set<String>? _shareUids;
 
@@ -1577,6 +1582,16 @@ class _AddEventDialogState extends State<AddEventDialog> {
             notifyInitial: false,
             onChanged: (u) => _shareUids = u,
           ),
+
+        // ── Avisar (push) a los destinatarios ───────────────────────────────
+        if (!_soloParaMi && !_isProposal)
+          _CheckRow(
+            icon: Icons.notifications_active_outlined,
+            label: 'Enviar aviso a los compartidos',
+            value: _sendPush,
+            color: Theme.of(context).colorScheme.primary,
+            onChanged: (v) => setState(() => _sendPush = v),
+          ),
       ],
     );
   }
@@ -1872,6 +1887,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
               'notifAt': _notifDateTime,
               'soloParaMi': _soloParaMi,
               'sharedWith': _shareUids?.toList(),
+              'sendPush': _sendPush && !_soloParaMi,
               'recurrence': _isEditing ? RecurrenceRule.none : _recurrence,
             });
           },

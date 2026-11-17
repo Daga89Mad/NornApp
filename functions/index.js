@@ -302,6 +302,10 @@ exports.onSharedEventWrite = onDocumentWritten('events/{eventId}', async (event)
   );
   if (newUids.length === 0) return;
 
+  // Solo se avisa si quien lo guardó marcó "Enviar aviso" (send_push).
+  // Por defecto (campo ausente o false) NO se envía push.
+  if (after.send_push !== true) return;
+
   const entries = await getTokensForUids(newUids);
   if (entries.length === 0) return;
 

@@ -41,6 +41,8 @@ class EventItem {
   // Con quién se comparte ESTE evento (UIDs), elegido a mano en el diálogo.
   // null = no se ha elegido: se usa el reparto global por categoría.
   final List<String>? sharedWith;
+  // Aviso push a los destinatarios al guardar. Por defecto NO se avisa.
+  final bool sendPush;
   const EventItem({
     this.id,
     required this.category,
@@ -61,6 +63,7 @@ class EventItem {
     this.soloParaMi = false,
     this.ownerId,
     this.sharedWith,
+    this.sendPush = false,
   });
   String get effectiveCategoryKey =>
       categoryKey ?? category.name; // ← 3) el getter
@@ -84,6 +87,7 @@ class EventItem {
     bool? soloParaMi,
     String? ownerId,
     List<String>? sharedWith,
+    bool? sendPush,
   }) => EventItem(
     id: id ?? this.id,
     category: category ?? this.category,
@@ -104,5 +108,6 @@ class EventItem {
     soloParaMi: soloParaMi ?? this.soloParaMi,
     ownerId: ownerId ?? this.ownerId,
     sharedWith: sharedWith ?? this.sharedWith,
+    sendPush: sendPush ?? this.sendPush,
   );
 }
