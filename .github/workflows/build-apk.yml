@@ -118,6 +118,17 @@ jobs:
             exit 1
           fi
 
+      # AAB para Google Play (misma firma y mismo número de build que la APK).
+      - name: Compilar AAB (Google Play)
+        run: flutter build appbundle --release --build-number=${{ steps.build.outputs.number }}
+
+      - name: Subir AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: nornapp-aab-build${{ steps.build.outputs.number }}
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 14
+
       - name: Preparar fichero
         id: apk
         run: |
@@ -162,7 +173,8 @@ jobs:
           overwrite_files: true
 
       - name: Publicar en la release apk-anuncios
-        if: github.ref == 'refs/heads/master_Anuncios'
+        # main y master_Anuncios ya son la misma versión (con anuncios).
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master_Anuncios'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-anuncios
