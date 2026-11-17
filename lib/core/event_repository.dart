@@ -48,6 +48,7 @@ class EventRepository {
       'notification_at': e.notificationAt?.millisecondsSinceEpoch,
       'solo_para_mi': e.soloParaMi ? 1 : 0,
       'shared_with': e.sharedWith == null ? null : jsonEncode(e.sharedWith),
+      'send_push': e.sendPush ? 1 : 0,
     };
   }
 
@@ -106,6 +107,7 @@ class EventRepository {
       soloParaMi: ((m['solo_para_mi'] as int?) ?? 0) == 1,
       ownerId: m['owner_id'] as String?,
       sharedWith: parseSharedWith(m['shared_with']),
+      sendPush: ((m['send_push'] as int?) ?? 0) == 1,
     );
   }
 

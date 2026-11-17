@@ -537,6 +537,8 @@ class FirebaseSyncService {
         'color': event.color.value,
         'creator': event.creator,
         'users': event.users.join('|'),
+        // La Cloud Function solo envía el push si viene a true.
+        'send_push': event.sendPush,
         'has_alarm': event.hasAlarm,
         'alarm_at': _tsFromMs(event.alarmAt?.millisecondsSinceEpoch),
         'has_notification': event.hasNotification,
@@ -581,6 +583,7 @@ class FirebaseSyncService {
         'color': row['color'] ?? 4280391411,
         'creator': row['creator'] ?? '',
         'users': row['users'] ?? '',
+        'send_push': row['send_push'] == 1,
         'has_alarm': row['has_alarm'] == 1,
         'alarm_at': _tsFromMs(row['alarm_at'] as int?),
         'has_notification': row['has_notification'] == 1,

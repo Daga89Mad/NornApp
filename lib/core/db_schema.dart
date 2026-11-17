@@ -35,7 +35,8 @@ class DBSchema {
       synced INTEGER NOT NULL DEFAULT 0, has_alarm INTEGER NOT NULL DEFAULT 0,
       alarm_at INTEGER, has_notification INTEGER NOT NULL DEFAULT 0,
       notification_at INTEGER, solo_para_mi INTEGER NOT NULL DEFAULT 0,
-      shared_with TEXT
+      shared_with TEXT,
+      send_push INTEGER NOT NULL DEFAULT 0
     )
   """;
 
