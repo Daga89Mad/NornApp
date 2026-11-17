@@ -1,0 +1,262 @@
+rules_version = '2';
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Reglas de Firestore de NornApp (proyecto familycalendar-a960a)
+//
+// Generadas a partir del uso real de la app (lib/core/*) y de las Cloud
+// Functions. Las Cloud Functions usan firebase-admin y NO pasan por estas
+// reglas.
+//
+// Principios:
+//  · Cada documento tiene dueño (owner_id, from_uid, members…). Solo el dueño
+//    lo crea, lo cambia entero o lo borra.
+//  · Quien lo tiene compartido (shared_with) puede leerlo y cambiar solo los
+//    campos que la app le deja tocar (marcar hecho, checklist…).
+//  · Leer un documento que aún no existe se permite (la app hace get() antes
+//    de crear y en transacciones).
+//
+// Desplegar:  firebase deploy --only firestore:rules --project familycalendar-a960a
+// ═════════════════════════════════════════════════════════════════════════════
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function me() {
+      return request.auth.uid;
+    }
+
+    // Documento existente del que soy dueño.
+    function ownsExisting() {
+      return signedIn() && resource.data.get('owner_id', '') == me();
+    }
+
+    // El documento que se escribe queda a mi nombre.
+    function ownsIncoming() {
+      return signedIn() && request.resource.data.get('owner_id', '') == me();
+    }
+
+    // Lo tengo compartido.
+    function sharedWithMe() {
+      return signedIn() && me() in resource.data.get('shared_with', []);
+    }
+
+    // Solo cambian estos campos (el resto queda igual).
+    function onlyChanges(fields) {
+      return request.resource.data.diff(resource.data)
+        .affectedKeys().hasOnly(fields);
+    }
+
+    // El dueño no cambia en una actualización.
+    function keepsOwner() {
+      return request.resource.data.get('owner_id', '') ==
+        resource.data.get('owner_id', '');
+    }
+
+    // Lectura de documentos con dueño + compartidos (eventos, tareas…).
+    function canReadShared() {
+      return signedIn()
+        && (resource == null || ownsExisting() || sharedWithMe());
+    }
+
+    // ── Perfiles públicos ────────────────────────────────────────────────────
+    // Todos los usuarios con sesión los leen (buscar amigos por email, nombre
+    // del creador). Solo cada uno escribe el suyo (nombre, tokens FCM).
+    match /user_profiles/{uid} {
+      allow read: if signedIn();
+      allow create, update, delete: if signedIn() && me() == uid;
+    }
+
+    // ── Datos privados de cada usuario ───────────────────────────────────────
+    // users/{uid}/diary, users/{uid}/private_events ("Solo para mí")…
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && me() == uid;
+    }
+
+    // ── Eventos del calendario ───────────────────────────────────────────────
+    match /events/{eventId} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      // Dueño: todo, sin cambiar de dueño.
+      allow update: if ownsExisting() && keepsOwner();
+      // Compartido conmigo: solo marcar puntos del checklist.
+      allow update: if sharedWithMe()
+        && onlyChanges(['checklist_items', 'updated_at']);
+      allow delete: if ownsExisting();
+    }
+
+    // ── Turnos ───────────────────────────────────────────────────────────────
+    match /shifts/{shiftId} {
+      allow read: if signedIn() && (resource == null || ownsExisting());
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow delete: if ownsExisting();
+    }
+
+    match /shift_assignments/{id} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow delete: if ownsExisting();
+    }
+
+    // ── Categorías del calendario ────────────────────────────────────────────
+    // Id del documento: "{owner_uid}_{key}". Algunas escrituras del dueño
+    // (compartir) no llevan owner_id, así que también vale el prefijo del id.
+    match /calendar_categories/{docId} {
+      function isMyDoc() {
+        return signedIn() && docId.matches(me() + '_.*');
+      }
+      allow read: if signedIn()
+        && (resource == null || ownsExisting() || sharedWithMe() || isMyDoc());
+      allow create: if isMyDoc()
+        && request.resource.data.get('owner_id', me()) == me();
+      allow update: if (isMyDoc() || ownsExisting()) && keepsOwner();
+      allow delete: if isMyDoc() || ownsExisting();
+    }
+
+    // ── Configuración de compartir (calendario y semanales) ──────────────────
+    // Id: "{from_uid}_{to_uid}". La lee el emisor y el receptor.
+    function shareCfgRead() {
+      return signedIn() && (resource == null
+        || resource.data.get('from_uid', '') == me()
+        || resource.data.get('to_uid', '') == me());
+    }
+    match /calendar_shares/{id} {
+      allow read: if shareCfgRead();
+      allow create: if signedIn() && request.resource.data.from_uid == me();
+      allow update: if signedIn() && resource.data.from_uid == me()
+        && request.resource.data.from_uid == me();
+      allow delete: if signedIn() && (resource.data.get('from_uid', '') == me()
+        || resource.data.get('to_uid', '') == me());
+    }
+    match /weekly_shares/{id} {
+      allow read: if shareCfgRead();
+      allow create: if signedIn() && request.resource.data.from_uid == me();
+      allow update: if signedIn() && resource.data.from_uid == me()
+        && request.resource.data.from_uid == me();
+      allow delete: if signedIn() && (resource.data.get('from_uid', '') == me()
+        || resource.data.get('to_uid', '') == me());
+    }
+
+    // ── Amigos ───────────────────────────────────────────────────────────────
+    match /friends/{friendId} {
+      allow read: if signedIn() && (resource == null || ownsExisting());
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow delete: if ownsExisting();
+    }
+
+    match /friend_requests/{reqId} {
+      allow read: if signedIn() && (resource == null
+        || resource.data.from_uid == me()
+        || resource.data.to_uid == me());
+      allow create: if signedIn() && request.resource.data.from_uid == me()
+        && request.resource.data.to_uid != me();
+      // Receptor: aceptar / rechazar. Emisor: 'synced' / 'removed'.
+      allow update: if signedIn()
+        && (resource.data.to_uid == me() || resource.data.from_uid == me())
+        && onlyChanges(['status']);
+      allow delete: if signedIn()
+        && (resource.data.from_uid == me() || resource.data.to_uid == me());
+    }
+
+    // ── Semanales: tareas, menús, entrenamientos, objetivos ──────────────────
+    match /weekly_tasks/{id} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow update: if sharedWithMe() && onlyChanges(['is_done', 'updated_at']);
+      allow delete: if ownsExisting();
+    }
+
+    match /weekly_menus/{id} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow update: if sharedWithMe()
+        && onlyChanges(['meal_type', 'title', 'description', 'is_done', 'updated_at']);
+      allow delete: if ownsExisting();
+    }
+
+    match /weekly_trainings/{id} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow update: if sharedWithMe() && onlyChanges(['is_done', 'updated_at']);
+      allow delete: if ownsExisting();
+    }
+
+    match /weekly_goals/{id} {
+      allow read: if canReadShared();
+      allow create: if ownsIncoming();
+      allow update: if ownsExisting() && keepsOwner();
+      allow update: if sharedWithMe() && onlyChanges(['is_done', 'updated_at']);
+      allow delete: if ownsExisting();
+    }
+
+    // ── Propuestas de cambio (semanales y eventos del calendario) ────────────
+    // Las crea quien propone; las ven y borran quien propone y quien responde.
+    match /date_change_requests/{id} {
+      allow read: if signedIn() && (resource == null
+        || resource.data.from_uid == me()
+        || resource.data.to_uid == me());
+      allow create: if signedIn() && request.resource.data.from_uid == me();
+      allow update: if false;
+      allow delete: if signedIn()
+        && (resource.data.from_uid == me() || resource.data.to_uid == me());
+    }
+
+    // ── Gastos compartidos ───────────────────────────────────────────────────
+    // Proyectos y series con lista 'members'; cualquier miembro los gestiona
+    // (crear el siguiente periodo, apuntar gastos, salir del proyecto).
+    function memberOf(data) {
+      return me() in data.get('members', []);
+    }
+
+    match /expense_projects/{projectId} {
+      allow read: if signedIn() && (resource == null || memberOf(resource.data));
+      allow create: if signedIn() && memberOf(request.resource.data);
+      allow update: if signedIn() && memberOf(resource.data);
+      allow delete: if signedIn() && memberOf(resource.data);
+
+      match /expenses/{expenseId} {
+        function projectPath() {
+          return /databases/$(database)/documents/expense_projects/$(projectId);
+        }
+        // Lectura: miembro del proyecto.
+        allow read: if signedIn() && exists(projectPath())
+          && memberOf(get(projectPath()).data);
+        // Escritura: miembro antes o después de la operación (el proyecto
+        // puede crearse o borrarse en el mismo lote que sus gastos).
+        allow write: if signedIn() && (
+          (exists(projectPath()) && memberOf(get(projectPath()).data))
+          || (existsAfter(projectPath()) && memberOf(getAfter(projectPath()).data))
+        );
+      }
+    }
+
+    match /expense_series/{seriesId} {
+      allow read: if signedIn() && (resource == null || memberOf(resource.data));
+      allow create: if signedIn() && memberOf(request.resource.data);
+      allow update: if signedIn() && memberOf(resource.data);
+      allow delete: if signedIn() && memberOf(resource.data);
+    }
+
+    // ── Premium concedido a mano (se gestiona desde la consola) ──────────────
+    // Id del documento: email del usuario.
+    match /premium_grants/{email} {
+      allow get: if signedIn() && request.auth.token.email != null
+        && (email == request.auth.token.email
+          || email == request.auth.token.email.lower());
+      allow list, write: if false;
+    }
+
+    // Todo lo demás: denegado.
+  }
+}
