@@ -127,6 +127,7 @@ class _MenuScreenState extends State<MenuScreen> {
       'date_change' => switch (data['item_type']) {
         'menus' => const WeeklyMenuScreen(),
         'trainings' => const WeeklyTrainingScreen(),
+        'events' => const CalendarScreen(),
         _ => const WeeklyTasksScreen(),
       },
       _ => null,

@@ -273,8 +273,30 @@ exports.onSharedEventWrite = onDocumentWritten('events/{eventId}', async (event)
     await event.data.after.ref.update(reset).catch(() => {});
   }
 
-  // UIDs añadidos en este cambio (a quienes se les acaba de compartir).
   const owner = after.owner_id || '';
+
+  // El dueño ha aceptado una propuesta de cambio: aviso al resto de afectados
+  // (los que ya lo tenían; los nuevos reciben el aviso de "compartido" abajo).
+  if (before && !timestampsEqual(before.last_change_at, after.last_change_at) &&
+      after.last_change_at) {
+    const proposer = after.last_change_from_uid || '';
+    const affected = beforeShared.filter(
+      (uid) => uid && uid !== owner && afterShared.includes(uid),
+    );
+    const entriesChanged = await getTokensForUids(affected);
+    if (entriesChanged.length > 0) {
+      const who = (after.last_change_from_name || '').trim();
+      await sendToTokens(entriesChanged, {
+        title: 'Evento actualizado',
+        body:
+          `${after.title || 'Un evento compartido'} ha cambiado` +
+          `${who && proposer ? ` (propuesto por ${who})` : ''}.`,
+        data: { eventId: event.params.eventId, type: 'shared_event' },
+      });
+    }
+  }
+
+  // UIDs añadidos en este cambio (a quienes se les acaba de compartir).
   const newUids = afterShared.filter(
     (uid) => uid && uid !== owner && !beforeShared.includes(uid),
   );
@@ -362,6 +384,7 @@ const TYPE_LABELS = {
   tasks: { the: 'la tarea', your: 'tu tarea' },
   menus: { the: 'el menú', your: 'tu menú' },
   trainings: { the: 'el entrenamiento', your: 'tu entrenamiento' },
+  events: { the: 'el evento', your: 'tu evento' },
 };
 
 /// Timestamp → "miércoles, 7 de octubre" en hora de España.
@@ -383,6 +406,16 @@ function buildDateChangeMessage(change) {
   const from = formatDay(change.old_date);
   const to = formatDay(change.new_date);
   const days = from && to ? ` del ${from} al ${to}` : '';
+
+  // Calendario: se proponen cambios (hora, título, día, compartir…) al dueño.
+  if (change.item_type === 'events') {
+    return {
+      title: `✏️ ${who} propone cambios en tu evento`,
+      body:
+        `${title ? `«${title}»` : 'Un evento compartido'}` +
+        `${from !== to ? days : ''}. Entra para aceptar o rechazar.`,
+    };
+  }
 
   if (isOwner) {
     return {

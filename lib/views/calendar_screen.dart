@@ -16,6 +16,7 @@ import 'share_calendar_dialog.dart';
 import '../core/category_repository.dart';
 import '../models/calendar_category.dart';
 import 'category_manager_screen.dart';
+import 'event_change_prompt.dart';
 import 'dart:math' as math;
 
 class CalendarScreen extends StatefulWidget {
@@ -134,6 +135,11 @@ class _CalendarScreenState extends State<CalendarScreen> {
           if (mounted) _loadMonth(_focusedMonth);
         },
       );
+    }
+
+    // Cambios que otras personas proponen en mis eventos compartidos.
+    if (mounted && await showPendingEventChanges(context)) {
+      await _loadMonth(_focusedMonth);
     }
   }
 

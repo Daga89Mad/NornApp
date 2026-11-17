@@ -51,6 +51,9 @@ class EventRepository {
     };
   }
 
+  /// Convierte una fila de SQLite en un EventItem (uso externo).
+  EventItem fromRow(Map<String, dynamic> row) => _fromMap(row);
+
   EventItem _fromMap(Map<String, dynamic> m) {
     final fromMin = (m['from_minutes'] as int?) ?? 0;
     final toMin = (m['to_minutes'] as int?) ?? 60;
