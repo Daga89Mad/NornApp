@@ -21,6 +21,8 @@ import '../core/week_dates.dart';
 import 'recurrence_picker.dart';
 import 'delete_series_dialog.dart';
 import 'share_with_picker.dart';
+import 'event_change_prompt.dart';
+import '../core/event_change_service.dart';
 import '../core/firebase_sync_service.dart';
 
 class DayView extends StatefulWidget {
@@ -47,7 +49,14 @@ class _DayViewState extends State<DayView> {
   void initState() {
     super.initState();
     _myUid = FirebaseAuth.instance.currentUser?.uid ?? '';
-    _loadAll();
+    _loadAll().then((_) => _checkEventProposals());
+  }
+
+  /// Si alguien ha propuesto cambios en mis eventos, se preguntan ahora.
+  Future<void> _checkEventProposals() async {
+    if (!mounted) return;
+    final changed = await showPendingEventChanges(context);
+    if (changed && mounted) await _loadAll();
   }
 
   @override
@@ -195,8 +204,70 @@ class _DayViewState extends State<DayView> {
     );
     if (result == null) return;
 
+    // Evento de otra persona: no se toca, se le propone el cambio.
+    if (EventChangeService.instance.isForeign(ev)) {
+      await _proposeChange(ev, result);
+      return;
+    }
+
     final saved = await _saveEventFromResult(result, existingEvent: ev);
     if (saved != null && mounted) setState(() => _events[idx] = saved);
+  }
+
+  /// Envía al dueño de [ev] los cambios hechos en el diálogo para que los
+  /// acepte o los rechace. Si los acepta, le llegan a todos.
+  Future<void> _proposeChange(EventItem ev, Map<String, dynamic> result) async {
+    final catKey = result['categoryKey'] as String? ?? ev.effectiveCategoryKey;
+    final catColorVal = result['categoryColor'] as int?;
+    final catIcon = result['categoryIcon'] as String?;
+    final enumCat = Category.values.firstWhere(
+      (c) => c.name == catKey,
+      orElse: () => Category.Evento,
+    );
+    final edited = ev.copyWith(
+      category: enumCat,
+      categoryKey: catKey,
+      tipo: (result['tipo'] as Tipo?) ?? ev.tipo,
+      title: result['title'] as String? ?? ev.title,
+      description: (result['description'] as String?) ?? ev.description,
+      icon: catIcon ?? ev.icon,
+      color: catColorVal != null ? Color(catColorVal) : ev.color,
+      from: result['start'] as TimeOfDay? ?? ev.from,
+      to: result['end'] as TimeOfDay? ?? ev.to,
+    );
+    final pickedDate = (result['date'] as DateTime?) ?? widget.date;
+
+    // Terceros con los que quiero compartirlo (amigos míos, aunque no lo
+    // sean del dueño). Se guardan también sus nombres para el dueño.
+    final addUids = (result['sharedWith'] as List<String>?) ?? const [];
+    final addNames = addUids.map((uid) {
+      for (final f in _cachedFriends) {
+        if (f.firebaseUid == uid) {
+          return f.alias.isNotEmpty ? f.alias : f.name;
+        }
+      }
+      return uid;
+    }).toList();
+
+    final ok = await EventChangeService.instance.propose(
+      original: ev,
+      originalDay: widget.date,
+      edited: edited,
+      newDay: pickedDate,
+      addSharedWith: addUids,
+      addSharedNames: addNames,
+    );
+    if (!mounted) return;
+    final owner = ev.creator.isNotEmpty ? ev.creator : 'quien lo creó';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          ok
+              ? 'Propuesta enviada a $owner. Se aplicará cuando la acepte.'
+              : 'No hay cambios que proponer',
+        ),
+      ),
+    );
   }
 
   Future<EventItem?> _saveEventFromResult(
@@ -604,6 +675,76 @@ class _DayViewState extends State<DayView> {
     return '$d $h:$m';
   }
 
+  // ── Selector cuando varios eventos se solapan ─────────────────────────────
+
+  /// Extensión vertical de una tarjeta tal y como se pinta (mínimo 80 px).
+  (double, double) _cardExtent(EventItem e) {
+    final top = _timeOfDayToTop(e.from);
+    final h = (_timeOfDayToTop(e.to) - top).clamp(80.0, double.infinity);
+    return (top, top + h);
+  }
+
+  /// Al pulsar un evento: si hay otros que se pintan encima/debajo de él,
+  /// se pregunta cuál abrir. Si no, se abre directamente.
+  Future<void> _onEventTap(EventItem ev, int idx) async {
+    final (aTop, aBottom) = _cardExtent(ev);
+    final overlapping = <int>[];
+    for (var i = 0; i < _events.length; i++) {
+      final (bTop, bBottom) = _cardExtent(_events[i]);
+      if (aTop < bBottom && bTop < aBottom) overlapping.add(i);
+    }
+    if (overlapping.length < 2) {
+      _showEventDetail(context, ev, idx);
+      return;
+    }
+
+    final chosen = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                '¿Qué evento quieres abrir?',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              ),
+            ),
+            for (final i in overlapping)
+              ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: _events[i].color.withOpacity(0.2),
+                  child: Text(_events[i].icon),
+                ),
+                title: Text(
+                  _events[i].title,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                subtitle: Text(
+                  '${_fmt(_events[i].from)} - ${_fmt(_events[i].to)}'
+                  '${EventChangeService.instance.isForeign(_events[i]) && _events[i].creator.isNotEmpty ? '  ·  De: ${_events[i].creator}' : ''}',
+                ),
+                trailing: Container(
+                  width: 6,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: _events[i].color,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+                onTap: () => Navigator.of(sheetCtx).pop(i),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (chosen == null || !mounted) return;
+    _showEventDetail(context, _events[chosen], chosen);
+  }
+
   // ── Tarjeta de evento ──────────────────────────────────────────────────────
 
   Widget _buildEventCard(int idx, EventItem ev) {
@@ -618,7 +759,7 @@ class _DayViewState extends State<DayView> {
       right: 12,
       height: cardH,
       child: GestureDetector(
-        onTap: () => _showEventDetail(context, ev, idx),
+        onTap: () => _onEventTap(ev, idx),
         onLongPress: () => _deleteEvent(idx),
         child: Card(
           color: ev.color.withOpacity(0.15),
@@ -1071,6 +1212,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
     return owner == null || owner.isEmpty || owner == me;
   }
 
+  /// Editar un evento de otra persona: se envía como propuesta al dueño.
+  bool get _isProposal => _isEditing && !_canChooseShare;
+
   /// Preselección: el reparto del propio evento o, si no tiene, el global
   /// de su categoría (lo que se usaría si no se elige nada).
   Future<Set<String>> _loadInitialShare() async {
@@ -1298,6 +1442,53 @@ class _AddEventDialogState extends State<AddEventDialog> {
     return '$d  $h:$m';
   }
 
+  // ── Sección para eventos de otra persona ──────────────────────────────────
+
+  Widget _buildProposalSection() {
+    final owner = widget.initialEvent?.creator ?? '';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Divider(height: 24),
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.amber.shade50,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.amber.shade300),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.info_outline, size: 18, color: Colors.amber.shade800),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Este evento es de ${owner.isNotEmpty ? owner : 'otra persona'}. '
+                  'Tus cambios se le enviarán para que los acepte; si los '
+                  'acepta, llegarán a todos los que lo tienen.',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          'Compartir también con',
+          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+        // Mis amigos (aunque no lo sean del dueño). Sin preselección.
+        ShareWithPicker(
+          type: 'calendar',
+          accent: Theme.of(context).colorScheme.primary,
+          loadInitial: () async => <String>{},
+          notifyInitial: false,
+          onChanged: (u) => _shareUids = u,
+        ),
+      ],
+    );
+  }
+
   // ── Sección alarma/notificación ───────────────────────────────────────────
 
   Widget _buildAlarmSection() {
@@ -1397,7 +1588,11 @@ class _AddEventDialogState extends State<AddEventDialog> {
     final isChecklist = _tipo == Tipo.Checklist;
 
     return AlertDialog(
-      title: Text(_isEditing ? 'Editar evento' : 'Añadir evento'),
+      title: Text(
+        _isProposal
+            ? 'Proponer cambios'
+            : (_isEditing ? 'Editar evento' : 'Añadir evento'),
+      ),
       content: SizedBox(
         width: double.maxFinite,
         child: SingleChildScrollView(
@@ -1606,7 +1801,8 @@ class _AddEventDialogState extends State<AddEventDialog> {
               ],
 
               // Alarma / Notificación / Solo para mí
-              _buildAlarmSection(),
+              // (en un evento ajeno: aviso + compartir con terceros)
+              _isProposal ? _buildProposalSection() : _buildAlarmSection(),
             ],
           ),
         ),
@@ -1679,7 +1875,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
               'recurrence': _isEditing ? RecurrenceRule.none : _recurrence,
             });
           },
-          child: Text(_isEditing ? 'Guardar' : 'Añadir'),
+          child: Text(
+            _isProposal ? 'Enviar propuesta' : (_isEditing ? 'Guardar' : 'Añadir'),
+          ),
         ),
       ],
     );

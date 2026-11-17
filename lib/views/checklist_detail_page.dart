@@ -1,5 +1,6 @@
 // lib/views/checklist_detail_page.dart
 
+import '../core/event_change_service.dart';
 import 'package:flutter/material.dart';
 import '../models/event_item.dart';
 import '../models/checklist_item.dart';
@@ -73,6 +74,12 @@ class _ChecklistDetailPageState extends State<ChecklistDetailPage> {
   // ── Editar ─────────────────────────────────────────────────────────────────
 
   Future<void> _openEdit() async {
+    // Checklist de otra persona: la edición (propuesta al dueño) la hace
+    // la vista del día.
+    if (EventChangeService.instance.isForeign(_event)) {
+      Navigator.of(context).pop({'action': 'edit'});
+      return;
+    }
     final existingItemTexts = _items.map((i) => i.text).toList();
 
     final result = await showDialog<Map<String, dynamic>?>(

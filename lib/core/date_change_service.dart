@@ -254,7 +254,12 @@ class DateChangeService {
       );
       if (snap.docs.isEmpty) return;
 
-      final rows = snap.docs.map((d) => _rowFromDoc(d.id, d.data())).toList();
+      // Las propuestas de eventos del calendario van por EventChangeService.
+      final rows = snap.docs
+          .where((d) => d.data()['item_type'] != 'events')
+          .map((d) => _rowFromDoc(d.id, d.data()))
+          .toList();
+      if (rows.isEmpty) return;
       await DBProvider.db.batchInsert(DBSchema.tablePendingDateChanges, rows);
       debugPrint(
         '📥 ${rows.length} propuestas de fecha pendientes para uid=$_uid',
@@ -294,6 +299,7 @@ class DateChangeService {
               case DocumentChangeType.added:
               case DocumentChangeType.modified:
                 if (data == null) continue;
+                if (data['item_type'] == 'events') continue;
                 await DBProvider.db.insertOrReplace(
                   DBSchema.tablePendingDateChanges,
                   _rowFromDoc(change.doc.id, data),
