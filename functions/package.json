@@ -2,7 +2,7 @@
   "name": "functions",
   "description": "Cloud Functions de NornApp (FCM para eventos/tareas compartidos)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "scripts": {
