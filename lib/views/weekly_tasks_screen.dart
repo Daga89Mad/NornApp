@@ -10,6 +10,7 @@ import '../core/weekly_share_service.dart';
 import '../core/friend_repository.dart';
 import '../core/date_change_service.dart';
 import 'date_change_prompt.dart';
+import 'weekly_share_request_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/week_dates.dart';
 import '../core/recurrence_rule.dart';
@@ -132,7 +133,14 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
       'tasks',
       accent: _primary,
     );
-    if (answered && mounted) _loadWeek();
+    if (!mounted) return;
+    // Peticiones de amigos para compartir mis tareas con más gente.
+    final shared = await showPendingShareRequests(
+      context,
+      'tasks',
+      accent: _primary,
+    );
+    if ((answered || shared) && mounted) _loadWeek();
   }
 
   /// Lunes (medianoche) de la semana de [d].
@@ -657,6 +665,8 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
 
     final friends = await FriendRepository.instance.getAll();
     Set<String> sharedUids = WeeklyShareService.parseUids(task.sharedWith);
+    // Tarea ajena: amigos míos con los que quiero que se comparta también.
+    Set<String> extraUids = {};
     List<WeeklyTask> subtasks = isParent
         ? await _repo.getSubtasks(task.id)
         : <WeeklyTask>[];
@@ -871,6 +881,15 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                       ),
                     ],
 
+                    // ── Tarea ajena: pedir al dueño compartirla con más gente
+                    //    (como en el calendario) ───────────────────────────────
+                    if (isForeign)
+                      ForeignShareSection(
+                        type: 'tasks',
+                        accent: _primary,
+                        onChanged: (u) => setS(() => extraUids = u),
+                      ),
+
                     // ── Compartir esta tarea suelta (solo si es mía) ──────────
                     if (!isForeign) ...[
                       const SizedBox(height: 16),
@@ -993,6 +1012,27 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                 onPressed: () => Navigator.pop(ctx),
                 child: Text(isForeign ? 'Cerrar' : 'Cancelar'),
               ),
+              if (isForeign && extraUids.isNotEmpty)
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(backgroundColor: _primary),
+                  onPressed: () async {
+                    if (ctx.mounted) Navigator.pop(ctx);
+                    await sendForeignShareRequest(
+                      context,
+                      type: 'tasks',
+                      itemId: task.id,
+                      itemTitle: task.title,
+                      ownerId: task.ownerId,
+                      ownerName: task.ownerName,
+                      sharedWithJson: task.sharedWith,
+                      uids: extraUids,
+                    );
+                  },
+                  child: const Text(
+                    'Enviar',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
               if (!isForeign)
                 ElevatedButton(
                   style: ElevatedButton.styleFrom(backgroundColor: _primary),

@@ -8,6 +8,7 @@ import '../core/weekly_training_repository.dart';
 import '../core/date_change_service.dart';
 import 'share_weekly_dialog.dart';
 import 'date_change_prompt.dart';
+import 'weekly_share_request_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/week_dates.dart';
 import '../core/weekly_share_service.dart';
@@ -115,7 +116,14 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
       'trainings',
       accent: _primary,
     );
-    if (answered && mounted) _loadWeek();
+    if (!mounted) return;
+    // Peticiones de amigos para compartir lo mío con más gente.
+    final shared = await showPendingShareRequests(
+      context,
+      'trainings',
+      accent: _primary,
+    );
+    if ((answered || shared) && mounted) _loadWeek();
   }
 
   /// Lunes (medianoche) de la semana de [d].
@@ -563,6 +571,8 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
     bool isDone = entry.isDone;
     String imageData = entry.imageData;
     final bool isForeign = entry.isSharedFromOther(_myUid);
+    // Entrenamiento ajeno: amigos míos con los que quiero compartirlo también.
+    Set<String> extraUids = {};
 
     await showDialog(
       context: context,
@@ -681,6 +691,15 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                     readOnly: isForeign,
                     onChanged: (v) => setS(() => imageData = v),
                   ),
+
+                  // Entrenamiento ajeno: pedir al dueño compartirlo con más
+                  // gente (se envía al pulsar Guardar).
+                  if (isForeign)
+                    ForeignShareSection(
+                      type: 'trainings',
+                      accent: _primary,
+                      onChanged: (u) => setS(() => extraUids = u),
+                    ),
                 ],
               ),
             ),
@@ -741,6 +760,18 @@ class _WeeklyTrainingScreenState extends State<WeeklyTrainingScreen> {
                   ),
                 );
                 if (ctx.mounted) Navigator.pop(ctx);
+                if (isForeign && extraUids.isNotEmpty && mounted) {
+                  await sendForeignShareRequest(
+                    context,
+                    type: 'trainings',
+                    itemId: entry.id,
+                    itemTitle: entry.title,
+                    ownerId: entry.ownerId,
+                    ownerName: entry.ownerName,
+                    sharedWithJson: entry.sharedWith,
+                    uids: extraUids,
+                  );
+                }
                 _loadWeek();
               },
               child: const Text(

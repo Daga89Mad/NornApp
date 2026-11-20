@@ -12,6 +12,7 @@ import '../core/date_change_service.dart';
 import 'shopping_list_screen.dart';
 import 'share_weekly_dialog.dart';
 import 'date_change_prompt.dart';
+import 'weekly_share_request_prompt.dart';
 import 'week_day_picker.dart';
 import '../core/recurrence_rule.dart';
 import 'recurrence_picker.dart';
@@ -113,7 +114,14 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
       'menus',
       accent: _primary,
     );
-    if (answered && mounted) _loadWeek();
+    if (!mounted) return;
+    // Peticiones de amigos para compartir lo mío con más gente.
+    final shared = await showPendingShareRequests(
+      context,
+      'menus',
+      accent: _primary,
+    );
+    if ((answered || shared) && mounted) _loadWeek();
   }
 
   /// Lunes (medianoche) de la semana de [d].
@@ -563,6 +571,8 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     // Cargamos amigos para poder mostrar/gestionar el compartir individual.
     final friends = await FriendRepository.instance.getAll();
     Set<String> sharedUids = WeeklyShareService.parseUids(entry.sharedWith);
+    // Menú ajeno: amigos míos con los que quiero que se comparta también.
+    Set<String> extraUids = {};
 
     await showDialog(
       context: context,
@@ -656,6 +666,14 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                     minLines: 6,
                     maxLines: 12,
                   ),
+
+                  // Menú ajeno: pedir al dueño compartirlo con más gente.
+                  if (isForeign)
+                    ForeignShareSection(
+                      type: 'menus',
+                      accent: _primary,
+                      onChanged: (u) => setS(() => extraUids = u),
+                    ),
 
                   // Compartir este menú suelto (solo si es mío)
                   if (!isForeign) ...[
@@ -770,6 +788,27 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
               onPressed: () => Navigator.pop(ctx),
               child: Text(isForeign ? 'Cerrar' : 'Cancelar'),
             ),
+            if (isForeign && extraUids.isNotEmpty)
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: _primary),
+                onPressed: () async {
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  await sendForeignShareRequest(
+                    context,
+                    type: 'menus',
+                    itemId: entry.id,
+                    itemTitle: entry.title,
+                    ownerId: entry.ownerId,
+                    ownerName: entry.ownerName,
+                    sharedWithJson: entry.sharedWith,
+                    uids: extraUids,
+                  );
+                },
+                child: const Text(
+                  'Enviar',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
             if (!isForeign)
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: _primary),

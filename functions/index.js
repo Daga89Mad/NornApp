@@ -421,6 +421,21 @@ function buildDateChangeMessage(change) {
     };
   }
 
+  // Semanales: alguien pide compartir con más gente algo que le compartí.
+  if (typeof change.item_type === 'string' &&
+      change.item_type.endsWith('_share')) {
+    const base = change.item_type.slice(0, -'_share'.length);
+    const l = TYPE_LABELS[base] || TYPE_LABELS.tasks;
+    const names = (change.add_shared_names || []).filter(Boolean);
+    const withWho = names.length ? ` con ${names.join(', ')}` : ' con más gente';
+    return {
+      title: `👥 ${who} quiere compartir ${l.your}`,
+      body:
+        `${title ? `«${title}»` : 'Un elemento compartido'}${withWho}. ` +
+        'Entra para aceptar o rechazar.',
+    };
+  }
+
   if (isOwner) {
     return {
       title: `📅 ${who} ha movido ${labels.your}`,

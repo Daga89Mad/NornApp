@@ -38,6 +38,7 @@ import 'package:flutter/foundation.dart';
 import 'db_provider.dart';
 import 'db_schema.dart';
 import 'shared_date_override_service.dart';
+import 'weekly_share_request_service.dart';
 
 /// Una propuesta pendiente de responder por MÍ.
 class PendingDateChange {
@@ -254,9 +255,16 @@ class DateChangeService {
       );
       if (snap.docs.isEmpty) return;
 
-      // Las propuestas de eventos del calendario van por EventChangeService.
+      // Las propuestas de eventos del calendario van por EventChangeService
+      // y las peticiones de compartir ('<tipo>_share') por
+      // WeeklyShareRequestService.
       final rows = snap.docs
           .where((d) => d.data()['item_type'] != 'events')
+          .where(
+            (d) => !WeeklyShareRequestService.isShareType(
+              d.data()['item_type'],
+            ),
+          )
           .map((d) => _rowFromDoc(d.id, d.data()))
           .toList();
       if (rows.isEmpty) return;
