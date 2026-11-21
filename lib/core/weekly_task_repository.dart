@@ -178,7 +178,14 @@ class WeeklyTaskRepository {
   ///  · Tarea EXISTENTE → se respeta el shared_with actual de la BD local
   ///    (compartidos y descompartidos individuales incluidos). El reparto
   ///    global ya se aplicó al crearla o lo aplica shareWithFriends().
-  Future<void> save(WeeklyTask task, {bool useGlobalShares = true}) async {
+  ///
+  /// [sendPush]: solo al CREAR. Si es true, la Cloud Function avisa con un
+  /// push a las personas con las que se comparte (por defecto no).
+  Future<void> save(
+    WeeklyTask task, {
+    bool useGlobalShares = true,
+    bool sendPush = false,
+  }) async {
     final bool isMine = task.ownerId.isEmpty || task.ownerId == _uid;
     final String? stored = await _storedSharedWith(task.id);
 
@@ -229,7 +236,7 @@ class WeeklyTaskRepository {
     );
 
     try {
-      await _pushToFirebase(toSave, uids.toList());
+      await _pushToFirebase(toSave, uids.toList(), sendPush: sendPush);
     } catch (e) {
       debugPrint('⚠️ Cambio guardado en local; falló la sincronización: $e');
     }
@@ -520,7 +527,11 @@ class WeeklyTaskRepository {
     }
   }
 
-  Future<void> _pushToFirebase(WeeklyTask task, List<String> sharedUids) async {
+  Future<void> _pushToFirebase(
+    WeeklyTask task,
+    List<String> sharedUids, {
+    bool sendPush = false,
+  }) async {
     if (_uid.isEmpty) return;
     try {
       final payload = <String, dynamic>{
@@ -534,6 +545,8 @@ class WeeklyTaskRepository {
         'recurrence': task.recurrence,
         'parent_id': task.parentId,
         'color': task.color,
+        // Solo al crear con "Enviar aviso" marcado (ver onSharedTaskWrite).
+        if (sendPush) 'send_push': true,
         'updated_at': FieldValue.serverTimestamp(),
       };
       await _firestore
@@ -589,10 +602,12 @@ class WeeklyTaskRepository {
     WeeklyTask task, [
     RecurrenceRule? rule,
     bool useGlobalShares = true,
+    bool sendPush = false,
   ]) async {
     final r = rule ?? RecurrenceRule.decode(task.recurrence);
     final base = task.copyWith(recurrence: r.encode());
-    await save(base, useGlobalShares: useGlobalShares);
+    // El aviso va solo con la primera: una serie no manda N pushes.
+    await save(base, useGlobalShares: useGlobalShares, sendPush: sendPush);
     if (r.isNone) return 1;
 
     final dates = r

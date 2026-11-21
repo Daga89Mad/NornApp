@@ -350,6 +350,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
     DateTime selectedDay = preselectedDay ?? _currentWeekStart;
     RecurrenceRule rule = RecurrenceRule.none;
     Set<String> shareUids = {};
+    bool sendPush = false; // "Enviar aviso a los compartidos"
     int selectedColor = 0;
     bool saving = false;
     final titleCtrl = TextEditingController();
@@ -431,6 +432,19 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                     accent: _accent,
                     onChanged: (u) => shareUids = u,
                   ),
+                  // Aviso push a los compartidos al crear. Por defecto no.
+                  CheckboxListTile(
+                    value: sendPush,
+                    onChanged: (v) => setS(() => sendPush = v ?? false),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    activeColor: _accent,
+                    title: const Text(
+                      'Enviar aviso a los compartidos',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -466,6 +480,7 @@ class _WeeklyTasksScreenState extends State<WeeklyTasksScreen> {
                         task,
                         rule,
                         false, // ya trae el reparto elegido en el diálogo
+                        sendPush,
                       );
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (!mounted) return;

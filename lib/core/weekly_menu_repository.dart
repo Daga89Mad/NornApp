@@ -169,7 +169,14 @@ class WeeklyMenuRepository {
   /// BUG CORREGIDO (igual que en tareas): en un menú EXISTENTE se respeta el
   /// shared_with actual de la BD local y no se vuelve a sumar el reparto
   /// global. Solo los menús NUEVOS heredan el reparto global.
-  Future<void> save(WeeklyMenuEntry entry, {bool useGlobalShares = true}) async {
+  ///
+  /// [sendPush]: solo al CREAR. Si es true, la Cloud Function avisa con un
+  /// push a las personas con las que se comparte (por defecto no).
+  Future<void> save(
+    WeeklyMenuEntry entry, {
+    bool useGlobalShares = true,
+    bool sendPush = false,
+  }) async {
     final bool isMine = entry.ownerId.isEmpty || entry.ownerId == _uid;
     final String? stored = await _storedSharedWith(entry.id);
 
@@ -218,7 +225,7 @@ class WeeklyMenuRepository {
       DBSchema.tableWeeklyMenus,
       toSave.toMap(),
     );
-    _pushToFirebase(toSave, uids.toList());
+    _pushToFirebase(toSave, uids.toList(), sendPush: sendPush);
   }
 
   /// Guarda el menú y, si [rule] se repite, crea una copia por cada fecha de
@@ -228,8 +235,10 @@ class WeeklyMenuRepository {
     WeeklyMenuEntry entry,
     RecurrenceRule rule, {
     bool useGlobalShares = true,
+    bool sendPush = false,
   }) async {
-    await save(entry, useGlobalShares: useGlobalShares);
+    // El aviso va solo con el primero: una serie no manda N pushes.
+    await save(entry, useGlobalShares: useGlobalShares, sendPush: sendPush);
     if (rule.isNone) return 1;
 
     final dates = rule
@@ -420,8 +429,9 @@ class WeeklyMenuRepository {
 
   Future<void> _pushToFirebase(
     WeeklyMenuEntry entry,
-    List<String> sharedUids,
-  ) async {
+    List<String> sharedUids, {
+    bool sendPush = false,
+  }) async {
     if (_uid.isEmpty) return;
     try {
       final payload = <String, dynamic>{
@@ -432,6 +442,8 @@ class WeeklyMenuRepository {
         'owner_id': _uid,
         'owner_name': _displayName,
         'shared_with': sharedUids,
+        // Solo al crear con "Enviar aviso" marcado (ver onSharedWeeklyCreate).
+        if (sendPush) 'send_push': true,
         'updated_at': FieldValue.serverTimestamp(),
       };
       await _firestore

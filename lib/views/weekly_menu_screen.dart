@@ -320,6 +320,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
     String mealType = WeeklyMenuEntry.mealTypes.first;
     RecurrenceRule rule = RecurrenceRule.none;
     Set<String> shareUids = {};
+    bool sendPush = false; // "Enviar aviso a los compartidos"
     bool saving = false;
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -406,6 +407,19 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                     accent: _accent,
                     onChanged: (u) => shareUids = u,
                   ),
+                  // Aviso push a los compartidos al crear. Por defecto no.
+                  CheckboxListTile(
+                    value: sendPush,
+                    onChanged: (v) => setS(() => sendPush = v ?? false),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    activeColor: _accent,
+                    title: const Text(
+                      'Enviar aviso a los compartidos',
+                      style: TextStyle(fontSize: 13),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -440,6 +454,7 @@ class _WeeklyMenuScreenState extends State<WeeklyMenuScreen> {
                         entry,
                         rule,
                         useGlobalShares: false, // reparto elegido en el diálogo
+                        sendPush: sendPush,
                       );
                       if (ctx.mounted) Navigator.pop(ctx);
                       if (!mounted) return;

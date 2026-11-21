@@ -336,6 +336,11 @@ exports.onSharedTaskWrite = onDocumentWritten('weekly_tasks/{taskId}', async (ev
   );
   if (newUids.length === 0) return;
 
+  // Al CREAR solo se avisa si se marcó "Enviar aviso a los compartidos"
+  // (send_push). Por defecto (campo ausente o false) NO se envía push.
+  // Compartir después una tarea ya existente sigue avisando como antes.
+  if (!before && after.send_push !== true) return;
+
   const entries = await getTokensForUids(newUids);
   if (entries.length === 0) return;
 
@@ -345,6 +350,39 @@ exports.onSharedTaskWrite = onDocumentWritten('weekly_tasks/{taskId}', async (ev
     data: { taskId: event.params.taskId, type: 'shared_task' },
   });
 });
+
+// Menús y entrenamientos: push al CREARLOS solo si se marcó
+// "Enviar aviso a los compartidos" (send_push). Por defecto no.
+function notifyWeeklyCreated(label, typeKey) {
+  return async (event) => {
+    const data = event.data && event.data.data();
+    if (!data || data.send_push !== true) return;
+    const owner = data.owner_id || '';
+    const uids = (Array.isArray(data.shared_with) ? data.shared_with : [])
+      .filter((uid) => uid && uid !== owner);
+    if (uids.length === 0) return;
+
+    const entries = await getTokensForUids(uids);
+    if (entries.length === 0) return;
+
+    const who = (data.owner_name || '').trim() || 'Alguien';
+    await sendToTokens(entries, {
+      title: `${label} compartido`,
+      body: `${who} te ha compartido: ${data.title || label.toLowerCase()}`,
+      data: { itemId: event.params.id, type: `shared_${typeKey}` },
+    });
+  };
+}
+
+exports.onSharedMenuCreate = onDocumentCreated(
+  'weekly_menus/{id}',
+  notifyWeeklyCreated('Menú', 'menu'),
+);
+
+exports.onSharedTrainingCreate = onDocumentCreated(
+  'weekly_trainings/{id}',
+  notifyWeeklyCreated('Entrenamiento', 'training'),
+);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. SOLICITUD DE AMISTAD (NUEVO)
