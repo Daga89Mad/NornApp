@@ -520,3 +520,93 @@ function timestampsEqual(a, b) {
   const bm = b && typeof b.toMillis === 'function' ? b.toMillis() : null;
   return am === bm;
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. AMIGO INVISIBLE (sorteo secreto)
+// ─────────────────────────────────────────────────────────────────────────────
+// El organizador pone status = 'drawing' en secret_santa_games/{id}. Esta
+// función hace el sorteo con firebase-admin y escribe una asignación por
+// jugador en secret_santa_games/{id}/assignments/{giverUid}. Las reglas solo
+// dejan leer a cada jugador la suya: nadie (ni el organizador) ve las demás.
+
+const crypto = require('crypto');
+const { onDocumentUpdated, onDocumentDeleted } =
+  require('firebase-functions/v2/firestore');
+
+/// Fisher–Yates con aleatoriedad criptográfica.
+function secureShuffle(list) {
+  const a = [...list];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = crypto.randomInt(i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+exports.onSecretSantaDraw = onDocumentUpdated(
+  'secret_santa_games/{gameId}',
+  async (event) => {
+    const before = event.data.before.data() || {};
+    const after = event.data.after.data() || {};
+    if (after.status !== 'drawing' || before.status === 'drawing') return;
+
+    const ref = event.data.after.ref;
+    const players = [...new Set((after.participants || []).filter(Boolean))];
+    if (players.length < 3) {
+      await ref.update({
+        status: 'open',
+        draw_error: 'Hacen falta al menos 3 jugadores apuntados.',
+      });
+      return;
+    }
+
+    // Orden aleatorio y cada uno regala al siguiente (ciclo): nadie se
+    // regala a sí mismo y todos reciben exactamente un regalo.
+    const order = secureShuffle(players);
+    const names = after.names || {};
+    const batch = db.batch();
+
+    const old = await ref.collection('assignments').get();
+    old.docs.forEach((d) => batch.delete(d.ref));
+
+    order.forEach((giver, i) => {
+      const receiver = order[(i + 1) % order.length];
+      batch.set(ref.collection('assignments').doc(giver), {
+        giver_uid: giver,
+        receiver_uid: receiver,
+        receiver_name: names[receiver] || '',
+        created_at: FieldValue.serverTimestamp(),
+      });
+    });
+    batch.update(ref, {
+      status: 'drawn',
+      drawn_at: FieldValue.serverTimestamp(),
+      draw_error: FieldValue.delete(),
+    });
+    await batch.commit();
+    logger.info(`Amigo invisible ${event.params.gameId}: ${players.length} jugadores`);
+
+    // Aviso a todos los jugadores (sin revelar nada).
+    try {
+      const entries = await getTokensForUids(players);
+      await sendToTokens(entries, {
+        title: '🎁 ¡Sorteo del amigo invisible hecho!',
+        body: `${(after.name || 'Amigo invisible').trim()}: entra para ver a quién te toca regalar.`,
+        data: { type: 'secret_santa', game_id: event.params.gameId },
+        collapseKey: `ss_${event.params.gameId}`,
+        timeSensitive: false,
+      });
+    } catch (e) {
+      logger.warn(`Amigo invisible: no se pudo avisar (${e})`);
+    }
+  },
+);
+
+/// Al borrar un juego se borran sus listas de deseos y asignaciones.
+exports.onSecretSantaDeleted = onDocumentDeleted(
+  'secret_santa_games/{gameId}',
+  async (event) => {
+    await db.recursiveDelete(
+      db.collection('secret_santa_games').doc(event.params.gameId),
+    );
+  },
+);
