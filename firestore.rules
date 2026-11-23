@@ -257,6 +257,59 @@ service cloud.firestore {
       allow list, write: if false;
     }
 
+    // ── Amigo invisible ──────────────────────────────────────────────────────
+    // secret_santa_games/{id}: { owner_id, name, budget_cents, event_date,
+    //   invited: [uid], participants: [uid], names: {uid: nombre},
+    //   status: open | drawing | drawn }
+    // · Lo ven los invitados. El organizador lo edita mientras está abierto
+    //   y lanza el sorteo (status → drawing). El resto solo se apunta o se
+    //   borra a sí mismo de 'participants'.
+    // · El sorteo lo hace la Cloud Function onSecretSantaDraw.
+    function inGame(data) {
+      return me() in data.get('invited', []);
+    }
+
+    // Solo yo entro o salgo de la lista (y mi nombre).
+    function onlyMyParticipation() {
+      let before = resource.data.get('participants', []).toSet();
+      let after = request.resource.data.get('participants', []).toSet();
+      return after.difference(before).union(before.difference(after))
+          .hasOnly([me()])
+        && me() in resource.data.get('invited', []);
+    }
+
+    match /secret_santa_games/{gameId} {
+      allow read: if signedIn() && (resource == null || inGame(resource.data));
+      allow create: if ownsIncoming() && inGame(request.resource.data)
+        && request.resource.data.get('status', '') == 'open';
+      allow update: if signedIn() && inGame(resource.data)
+        && resource.data.get('status', '') == 'open'
+        && (
+          (ownsExisting() && keepsOwner()
+            && request.resource.data.get('status', '') in ['open', 'drawing'])
+          || (onlyChanges(['participants', 'names']) && onlyMyParticipation())
+        );
+      allow delete: if ownsExisting();
+
+      function gamePath() {
+        return /databases/$(database)/documents/secret_santa_games/$(gameId);
+      }
+
+      // Lista de deseos: la ven todos los del juego, solo la escribe su dueño.
+      match /wishlists/{uid} {
+        allow read: if signedIn() && exists(gamePath())
+          && inGame(get(gamePath()).data);
+        allow write: if signedIn() && me() == uid && exists(gamePath())
+          && inGame(get(gamePath()).data);
+      }
+
+      // A quién regalo: solo lo lee el que regala. Solo escribe la función.
+      match /assignments/{giverUid} {
+        allow read: if signedIn() && me() == giverUid;
+        allow write: if false;
+      }
+    }
+
     // Todo lo demás: denegado.
   }
 }

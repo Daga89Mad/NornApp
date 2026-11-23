@@ -8,6 +8,8 @@
 // - v2: Added Menú Semanal and Tareas Semanales after Calendario.
 // - v3: Added Gastos (proyectos de gastos compartidos) after Tareas semanales.
 //       Al entrar se crean los periodos pendientes de los gastos periódicos.
+// - v5: Gastos y Diario pasan a la pantalla Utilidades (junto con el nuevo
+//       Amigo invisible). En el menú queda solo el botón Utilidades.
 // - v4: Al pulsar una notificación de solicitud de amistad o de cambio de
 //       día se abre directamente la pantalla correspondiente.
 
@@ -24,12 +26,11 @@ import 'package:nornapp/views/premium/banner_ad_widget.dart';
 import 'package:nornapp/views/shifts_screen.dart';
 import 'package:nornapp/views/friends_screen.dart';
 import 'package:nornapp/views/qr_share_screen.dart';
-import 'package:nornapp/views/diary_screen.dart';
 import 'package:nornapp/views/fun_day_sheet.dart';
 import 'package:nornapp/views/weekly_menu_screen.dart';
 import 'package:nornapp/views/weekly_training_screen.dart';
 import 'package:nornapp/views/weekly_tasks_screen.dart';
-import 'package:nornapp/views/expenses/expenses_screen.dart';
+import 'package:nornapp/views/utilities_screen.dart';
 import 'dart:math' as math;
 import '../core/settings_repository.dart';
 
@@ -220,10 +221,10 @@ class _MenuScreenState extends State<MenuScreen> {
     ).push(MaterialPageRoute(builder: (_) => const WeeklyTasksScreen()));
   }
 
-  void _openExpenses() {
+  void _openUtilities() {
     Navigator.of(
       context,
-    ).push(MaterialPageRoute(builder: (_) => const ExpensesScreen()));
+    ).push(MaterialPageRoute(builder: (_) => const UtilitiesScreen()));
   }
 
   void _openShifts() {
@@ -242,12 +243,6 @@ class _MenuScreenState extends State<MenuScreen> {
     Navigator.of(
       context,
     ).push(MaterialPageRoute(builder: (_) => const QrShareScreen()));
-  }
-
-  void _openDiary() {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (_) => const DiaryScreen()));
   }
 
   void _openFunSheet() {
@@ -282,9 +277,9 @@ class _MenuScreenState extends State<MenuScreen> {
       onTap: _openWeeklyTasks,
     ),
     _MenuItemData(
-      icon: Icons.account_balance_wallet_outlined,
-      label: 'Gastos',
-      onTap: _openExpenses,
+      icon: Icons.widgets_outlined,
+      label: 'Utilidades',
+      onTap: _openUtilities,
     ),
     _MenuItemData(
       icon: Icons.work_history,
@@ -292,11 +287,6 @@ class _MenuScreenState extends State<MenuScreen> {
       onTap: _openShifts,
     ),
     _MenuItemData(icon: Icons.group, label: 'Amigos', onTap: _openFriends),
-    _MenuItemData(
-      icon: Icons.menu_book_outlined,
-      label: 'Diario',
-      onTap: _openDiary,
-    ),
     _MenuItemData(
       icon: Icons.qr_code,
       label: 'Compartir usuario (QR)',
@@ -325,14 +315,12 @@ class _MenuScreenState extends State<MenuScreen> {
         return palette.primary.withOpacity(0.88);
       case 'Tareas semanales':
         return palette.primary.withOpacity(0.85);
-      case 'Gastos':
+      case 'Utilidades':
         return palette.primary.withOpacity(0.9);
       case 'Turnos':
         return palette.primary.withOpacity(0.95);
       case 'Amigos':
         return palette.primary.withOpacity(0.80);
-      case 'Diario':
-        return palette.primary.withOpacity(0.9);
       case 'Compartir usuario (QR)':
         return palette.primary.withOpacity(0.88);
       case 'Ajustes':
